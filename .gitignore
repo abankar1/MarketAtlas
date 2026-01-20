@@ -1,0 +1,43 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyx.in
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Credentials — NEVER commit the real config
+src/config/configuration.json
+
+# Large test / sample data files (not needed in repo)
+data/AAPL.json
+ibmOutput.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database dumps / backups
+backups/
+*.dump
+*.sql.gz
+
+# Logs
+*.log
+
+#Claude
+.claude

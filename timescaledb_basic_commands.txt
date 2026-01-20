@@ -1,0 +1,244 @@
+TimescaleDB – Basic Commands & Usage (macOS)
+
+Overview
+--------
+TimescaleDB is a PostgreSQL extension optimized for time-series data.
+It runs inside PostgreSQL and is managed using PostgreSQL service commands.
+
+This document covers:
+- Market Atlas database setup (project-specific)
+- Starting and stopping PostgreSQL (with TimescaleDB)
+- Verifying TimescaleDB
+- Basic usage commands
+- Common operational checks
+
+
+==========================================================
+MARKET ATLAS — DATABASE SETUP (run once on a fresh install)
+==========================================================
+
+-- Step 1: Create the database
+CREATE DATABASE market_timeseries;
+
+-- Step 2: Connect to it and enable TimescaleDB
+\c market_timeseries
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+-- Step 3: Create tables
+
+CREATE TABLE IF NOT EXISTS assets (
+    symbol          TEXT PRIMARY KEY,
+    name            TEXT,
+    exchange_code   TEXT,
+    exchange        TEXT,
+    asset_type      TEXT,
+    price_currency  TEXT,
+    last_refreshed  DATE
+);
+
+CREATE TABLE IF NOT EXISTS daily_bars (
+    symbol          TEXT        NOT NULL,
+    ts              TIMESTAMPTZ NOT NULL,
+    open            NUMERIC,
+    high            NUMERIC,
+    low             NUMERIC,
+    close           NUMERIC,
+    volume          BIGINT,
+    adj_open        NUMERIC,
+    adj_high        NUMERIC,
+    adj_low         NUMERIC,
+    adj_close       NUMERIC,
+    adj_volume      BIGINT,
+    split_factor    NUMERIC,
+    dividend        NUMERIC,
+    PRIMARY KEY (symbol, ts)
+);
+
+CREATE TABLE IF NOT EXISTS sp500_constituents (
+    symbol          TEXT PRIMARY KEY,
+    security        TEXT,
+    gics_sector     TEXT,
+    gics_sub_industry TEXT,
+    hq_location     TEXT,
+    date_added      DATE,
+    cik             TEXT,
+    founded         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS nasdaq100_constituents (
+    symbol          TEXT PRIMARY KEY,
+    company         TEXT,
+    icb_industry    TEXT,
+    icb_subsector   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS dow30_constituents (
+    symbol          TEXT PRIMARY KEY,
+    company         TEXT,
+    exchange        TEXT,
+    industry        TEXT,
+    date_added      DATE,
+    notes           TEXT,
+    index_weighting NUMERIC
+);
+
+-- Step 4: Convert daily_bars to a TimescaleDB hypertable
+SELECT create_hypertable('daily_bars', 'ts', if_not_exists => TRUE);
+
+-- Step 5: Add compression (segment by symbol for best query performance)
+ALTER TABLE daily_bars
+SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'symbol',
+    timescaledb.compress_orderby   = 'ts DESC'
+);
+
+SELECT add_compression_policy('daily_bars', INTERVAL '30 days');
+
+-- Optional: retention policy (uncomment to auto-drop data older than 11 years)
+-- SELECT add_retention_policy('daily_bars', INTERVAL '11 years');
+
+==========================================================
+
+
+1. Starting and Stopping PostgreSQL
+----------------------------------
+
+Start PostgreSQL:
+brew services start postgresql@17
+
+Stop PostgreSQL:
+brew services stop postgresql@17
+
+Restart PostgreSQL:
+brew services restart postgresql@17
+
+Check service status:
+brew services list | grep postgres
+
+
+2. Connecting to PostgreSQL
+---------------------------
+
+Connect to default database:
+psql -d postgres
+
+Connect to a specific database:
+psql -d my_database
+
+Check PostgreSQL version:
+psql -d postgres -c "SELECT version();"
+
+
+3. Verify TimescaleDB Installation
+----------------------------------
+
+Check preload configuration:
+psql -d postgres -c "SHOW shared_preload_libraries;"
+
+Expected output:
+timescaledb
+
+List installed extensions:
+psql -d postgres -c "\dx"
+
+Check TimescaleDB version:
+psql -d postgres -c "SELECT extname, extversion FROM pg_extension WHERE extname='timescaledb';"
+
+
+4. Enable TimescaleDB in a Database
+----------------------------------
+
+TimescaleDB must be enabled per database.
+
+psql -d my_database -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"
+
+
+5. Creating a Hypertable
+-----------------------
+
+Create a regular table:
+CREATE TABLE metrics (
+  ts timestamptz NOT NULL,
+  value double precision,
+  source text
+);
+
+Convert it to a hypertable:
+SELECT create_hypertable('metrics', 'ts');
+
+
+6. Inserting Data
+-----------------
+
+INSERT INTO metrics (ts, value, source)
+VALUES (now(), 42.5, 'sensor-1');
+
+
+7. Querying Time-Series Data
+----------------------------
+
+Last 24 hours:
+SELECT *
+FROM metrics
+WHERE ts >= now() - interval '24 hours'
+ORDER BY ts;
+
+Hourly aggregation:
+SELECT
+  time_bucket('1 hour', ts) AS bucket,
+  avg(value)
+FROM metrics
+GROUP BY bucket
+ORDER BY bucket;
+
+
+8. Retention Policy
+-------------------
+
+Automatically delete old data:
+SELECT add_retention_policy(
+  'metrics',
+  INTERVAL '30 days'
+);
+
+
+9. Compression
+--------------
+
+Enable compression:
+ALTER TABLE metrics
+SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'source'
+);
+
+Add compression policy:
+SELECT add_compression_policy(
+  'metrics',
+  INTERVAL '7 days'
+);
+
+
+10. Operational Commands
+------------------------
+
+Check data directory:
+psql -d postgres -c "SHOW data_directory;"
+
+Check config file in use:
+psql -d postgres -c "SHOW config_file;"
+
+List hypertables:
+SELECT * FROM timescaledb_information.hypertables;
+
+List chunks:
+SELECT * FROM timescaledb_information.chunks;
+
+
+Summary
+-------
+- TimescaleDB runs inside PostgreSQL
+- Service control is done via PostgreSQL
+- Hypertables are the core abstraction
+- Standard SQL applies, optimized for time-series
