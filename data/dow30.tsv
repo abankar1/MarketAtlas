@@ -1,0 +1,32 @@
+DJIA component companies, showing trading exchange, ticker symbols and industry
+Company	Exchange	Symbol	Industry	Date added	Notes	Index weighting
+3M	NYSE	MMM	Conglomerate	1976-08-09	As Minnesota Mining and Manufacturing	2.17%
+American Express	NYSE	AXP	Financial services	1982-08-30		4.31%
+Amgen	NASDAQ	AMGN	Biopharmaceutical	2020-08-31		4.14%
+Amazon	NASDAQ	AMZN	Retailing	2024-02-26		2.99%
+Apple	NASDAQ	AAPL	Information technology	2015-03-19		2.92%
+Boeing	NYSE	BA	Aerospace and defense	1987-03-12		3.03%
+Caterpillar	NYSE	CAT	Construction and mining	1991-05-06		5.13%
+Chevron	NYSE	CVX	Petroleum industry	2008-02-19	Also 1930-07-18 to 1999-11-01	2.01%
+Cisco	NASDAQ	CSCO	Information technology	2009-06-08		0.92%
+Coca-Cola	NYSE	KO	Drink industry	1987-03-12	Also 1932-05-26 to 1935-11-20	1.04%
+Disney	NYSE	DIS	Broadcasting and entertainment	1991-05-06		1.63%
+Goldman Sachs	NYSE	GS	Financial services	2013-09-23		8.79%
+Home Depot	NYSE	HD	Home Improvement	1999-11-01		5.35%
+Honeywell	NASDAQ	HON	Conglomerate	2020-08-31	AlliedSignal and Honeywell	3.27%
+IBM	NYSE	IBM	Information technology	1979-06-29	Also 1932-05-26 to 1939-03-04	3.77%
+Johnson & Johnson	NYSE	JNJ	Pharmaceutical industry	1997-03-17		2.24%
+JPMorgan Chase	NYSE	JPM	Financial services	1991-05-06		3.83%
+McDonald's	NYSE	MCD	Food industry	1985-10-30		4.57%
+Merck	NYSE	MRK	Pharmaceutical industry	1979-06-29		1.11%
+Microsoft	NASDAQ	MSFT	Information technology	1999-11-01		6.69%
+Nike	NYSE	NKE	Clothing industry	2013-09-23		0.90%
+Nvidia	NASDAQ	NVDA	Information technology	2024-11-08		2.02%
+Procter & Gamble	NYSE	PG	Fast-moving consumer goods	1932-05-26		2.46%
+Salesforce	NYSE	CRM	Information technology	2020-08-31		3.88%
+Sherwin-Williams	NYSE	SHW	Specialty chemicals	2024-11-08		5.19%
+Travelers Companies, Inc.	NYSE	TRV	Insurance	2009-06-08		3.98%
+UnitedHealth Group	NYSE	UNH	Managed health care	2012-09-24		4.34%
+Verizon	NYSE	VZ	Telecommunications industry	2004-04-08		0.63%
+Visa	NYSE	V	Financial services	2013-09-23		5.28%
+Walmart	NASDAQ	WMT	Retailing	1997-03-17		1.41%
