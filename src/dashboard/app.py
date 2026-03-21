@@ -2,17 +2,30 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import sys
 from pathlib import Path
 
 from collections import OrderedDict
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import psycopg
 import streamlit as st
-
+from plotly.subplots import make_subplots
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.dashboard.indicators import (  # noqa: E402
+    compute_bollinger_bands,
+    compute_ema,
+    compute_rsi,
+    compute_sma,
+)
+from src.db.repositories import fetch_ohlcv  # noqa: E402
 CONFIG_CANDIDATES = [
     REPO_ROOT / "src" / "config" / "config.json",
     REPO_ROOT / "src" / "config" / "configuration.json",
@@ -295,6 +308,135 @@ def get_treemap_data_cached(
     return df
 
 
+# --- In-memory LRU cache for OHLCV data (per session) ---
+def _get_ohlcv_cache() -> "OrderedDict[tuple, pd.DataFrame]":
+    if "ohlcv_cache" not in st.session_state:
+        st.session_state["ohlcv_cache"] = OrderedDict()
+    return st.session_state["ohlcv_cache"]
+
+
+def get_ohlcv_cached(
+    db_url: str,
+    symbol: str,
+    date_from: dt.date,
+    date_to: dt.date,
+    cache_size: int = 20,
+) -> pd.DataFrame:
+    key = (symbol, date_from.isoformat(), date_to.isoformat())
+    cache = _get_ohlcv_cache()
+    if key in cache:
+        cache.move_to_end(key)
+        return cache[key]
+    with connect(db_url) as conn:
+        df = fetch_ohlcv(conn, symbol=symbol, date_from=date_from, date_to=date_to)
+    cache[key] = df
+    cache.move_to_end(key)
+    while len(cache) > cache_size:
+        cache.popitem(last=False)
+    return df
+
+
+def build_detail_fig(
+    df: pd.DataFrame, symbol: str, active: list[str]
+) -> go.Figure:
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.60, 0.20, 0.20],
+        subplot_titles=("", "Volume", "RSI (14)"),
+    )
+
+    close = df["close"]
+    dates = df["date"]
+
+    # Row 1 — Candlestick
+    fig.add_trace(
+        go.Candlestick(
+            x=dates,
+            open=df["open"],
+            high=df["high"],
+            low=df["low"],
+            close=close,
+            name=symbol,
+            increasing_line_color="#26a69a",
+            decreasing_line_color="#ef5350",
+        ),
+        row=1, col=1,
+    )
+
+    # Overlay indicators on row 1
+    if "SMA 20" in active:
+        fig.add_trace(
+            go.Scatter(x=dates, y=compute_sma(close, 20), name="SMA 20",
+                       line=dict(color="#1976D2", width=1.2)),
+            row=1, col=1,
+        )
+    if "SMA 50" in active:
+        fig.add_trace(
+            go.Scatter(x=dates, y=compute_sma(close, 50), name="SMA 50",
+                       line=dict(color="#F57C00", width=1.2)),
+            row=1, col=1,
+        )
+    if "EMA 20" in active:
+        fig.add_trace(
+            go.Scatter(x=dates, y=compute_ema(close, 20), name="EMA 20",
+                       line=dict(color="#7B1FA2", width=1.2, dash="dot")),
+            row=1, col=1,
+        )
+    if "Bollinger Bands" in active:
+        bb = compute_bollinger_bands(close)
+        fig.add_trace(
+            go.Scatter(x=dates, y=bb["bb_upper"], name="BB Upper",
+                       line=dict(color="#78909C", width=1, dash="dash"), showlegend=True),
+            row=1, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=dates, y=bb["bb_mid"], name="BB Mid",
+                       line=dict(color="#78909C", width=0.8, dash="dot"), showlegend=False),
+            row=1, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=dates, y=bb["bb_lower"], name="BB Lower",
+                       line=dict(color="#78909C", width=1, dash="dash"),
+                       fill="tonexty", fillcolor="rgba(120,144,156,0.08)", showlegend=False),
+            row=1, col=1,
+        )
+
+    # Row 2 — Volume bars coloured by up/down
+    bar_colors = np.where(df["close"].values >= df["open"].values, "#26a69a", "#ef5350")
+    fig.add_trace(
+        go.Bar(x=dates, y=df["volume"], name="Volume",
+               marker_color=bar_colors, showlegend=False),
+        row=2, col=1,
+    )
+
+    # Row 3 — RSI
+    if "RSI" in active:
+        rsi = compute_rsi(close)
+        fig.add_trace(
+            go.Scatter(x=dates, y=rsi, name="RSI 14",
+                       line=dict(color="#FF6F00", width=1.5), showlegend=False),
+            row=3, col=1,
+        )
+        fig.add_hline(y=70, line_dash="dot", line_color="red", row=3, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="green", row=3, col=1)
+
+    fig.update_layout(
+        height=800,
+        margin=dict(t=30, l=60, r=20, b=20),
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+    )
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Volume", row=2, col=1)
+    fig.update_yaxes(title_text="RSI", row=3, col=1, range=[0, 100])
+
+    return fig
+
+
 def main() -> None:
     st.set_page_config(page_title="Market Heatmap", layout="wide")
     st.markdown(
@@ -472,6 +614,7 @@ def main() -> None:
 
     if st.sidebar.button("Clear cached results"):
         _get_session_cache().clear()
+        _get_ohlcv_cache().clear()
         st.session_state["treemap_cache_hits"] = 0
         st.session_state["treemap_cache_misses"] = 0
         st.sidebar.success("Cleared cache")
@@ -491,30 +634,109 @@ def main() -> None:
         )
         st.stop()
 
-    # Top KPIs
-    st.markdown("<div style='margin-top:-10px'></div>", unsafe_allow_html=True)
-    cols = st.columns(4)
-    cols[0].metric("Symbols", f"{len(df)}")
-    cols[1].metric(
-        f"Median return ({range_label})", f"{df['return_pct'].median():.2f}%"
-    )
-    cols[2].metric(
-        f"Best ({range_label})",
-        f"{df.loc[df['return_pct'].idxmax(), 'symbol']} ({df['return_pct'].max():.2f}%)",
-    )
-    cols[3].metric(
-        f"Worst ({range_label})",
-        f"{df.loc[df['return_pct'].idxmin(), 'symbol']} ({df['return_pct'].min():.2f}%)",
+    active_view = st.radio(
+        "View",
+        ["Heatmap", "Stock Detail"],
+        horizontal=True,
+        key="active_view",
+        label_visibility="collapsed",
     )
 
-    fig = build_fig(df, color_range=color_range)
-    st.plotly_chart(fig, use_container_width=True, theme=None)
-
-    with st.expander("Show raw data"):
-        st.dataframe(
-            df.sort_values("return_pct", ascending=False).reset_index(drop=True),
-            use_container_width=True,
+    if active_view == "Heatmap":
+        # Top KPIs
+        st.markdown("<div style='margin-top:-10px'></div>", unsafe_allow_html=True)
+        cols = st.columns(4)
+        cols[0].metric("Symbols", f"{len(df)}")
+        cols[1].metric(
+            f"Median return ({range_label})", f"{df['return_pct'].median():.2f}%"
         )
+        cols[2].metric(
+            f"Best ({range_label})",
+            f"{df.loc[df['return_pct'].idxmax(), 'symbol']} ({df['return_pct'].max():.2f}%)",
+        )
+        cols[3].metric(
+            f"Worst ({range_label})",
+            f"{df.loc[df['return_pct'].idxmin(), 'symbol']} ({df['return_pct'].min():.2f}%)",
+        )
+
+        fig = build_fig(df, color_range=color_range)
+        st.plotly_chart(fig, use_container_width=True, theme=None)
+
+        with st.expander("Show raw data"):
+            st.dataframe(
+                df.sort_values("return_pct", ascending=False).reset_index(drop=True),
+                use_container_width=True,
+            )
+
+    else:  # Stock Detail
+        # Build symbol options with return % for context
+        symbol_returns = (
+            df[["symbol", "group_name", "return_pct"]]
+            .sort_values("symbol")
+            .reset_index(drop=True)
+        )
+        symbol_options = [
+            f"{row.symbol}  ({row.group_name}, {row.return_pct:+.1f}%)"
+            for row in symbol_returns.itertuples()
+        ]
+        symbol_map = dict(zip(symbol_options, symbol_returns["symbol"]))
+
+        search = st.text_input(
+            "Search symbol",
+            placeholder="Type to filter (e.g. AAPL, MSFT, Tech...)",
+            key="symbol_search",
+        )
+
+        if search:
+            query = search.upper()
+            filtered = [s for s in symbol_options if query in s.upper()]
+        else:
+            filtered = symbol_options
+
+        if not filtered:
+            st.warning(f"No symbols match '{search}'.")
+            st.stop()
+
+        # Persist selection across reruns even when the filtered list changes
+        prev = st.session_state.get("detail_symbol_display")
+        if prev in filtered:
+            default_idx = filtered.index(prev)
+        else:
+            default_idx = 0
+
+        selected_display = st.selectbox(
+            "Select symbol",
+            filtered,
+            index=default_idx,
+            key="detail_symbol_display",
+        )
+        selected_symbol = symbol_map[selected_display]
+
+        active_indicators = st.multiselect(
+            "Overlays",
+            ["SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI"],
+            default=["SMA 20", "SMA 50"],
+            key="detail_indicators",
+        )
+
+        with st.spinner(f"Loading {selected_symbol}..."):
+            df_ohlcv = get_ohlcv_cached(
+                db_url, selected_symbol, date_from, date_to
+            )
+
+        if df_ohlcv.empty:
+            st.warning("No price data found for this symbol in the selected date range.")
+        else:
+            if len(df_ohlcv) < 21:
+                st.warning(
+                    f"Only {len(df_ohlcv)} bars in range — some indicators need more data "
+                    "(Bollinger Bands: 21, SMA 50: 50). Extend the date range for complete signals."
+                )
+            st.plotly_chart(
+                build_detail_fig(df_ohlcv, selected_symbol, active_indicators),
+                use_container_width=True,
+                theme=None,
+            )
 
 
 if __name__ == "__main__":

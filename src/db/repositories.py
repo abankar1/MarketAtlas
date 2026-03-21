@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
+import pandas as pd
 import psycopg
 
 
@@ -84,6 +85,24 @@ def fetch_dow30_symbols(conn) -> list[str]:
     with conn.cursor() as cur:
         cur.execute(q)
         return [r[0] for r in cur.fetchall()]
+
+
+def fetch_ohlcv(
+    conn: psycopg.Connection,
+    symbol: str,
+    date_from: dt.date,
+    date_to: dt.date,
+) -> pd.DataFrame:
+    q = """
+    SELECT
+        (ts AT TIME ZONE 'UTC')::date AS date,
+        open, high, low, close, volume
+    FROM public.daily_bars
+    WHERE symbol = %(symbol)s
+      AND (ts AT TIME ZONE 'UTC')::date BETWEEN %(date_from)s AND %(date_to)s
+    ORDER BY ts ASC
+    """
+    return pd.read_sql(q, conn, params={"symbol": symbol, "date_from": date_from, "date_to": date_to})
 
 
 def upsert_asset(conn: psycopg.Connection, asset_row: dict[str, Any]) -> None:
