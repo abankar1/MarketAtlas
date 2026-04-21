@@ -2,5 +2,6 @@
   "db_url": "postgresql://user:password@localhost:5432/market_timeseries",
   "marketdata_token": "YOUR_MARKETSTACK_ACCESS_KEY",
   "days": 1000,
-  "api_sleep_seconds": 0.2
+  "api_sleep_seconds": 0.2,
+  "anthropic_api_key": "YOUR_ANTHROPIC_API_KEY (optional — used for AI sector classification)"
 }

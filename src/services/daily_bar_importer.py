@@ -79,6 +79,7 @@ class DailyBarImporter:
                 "asset_type": candles[0].get("asset_type"),
                 "price_currency": candles[0].get("price_currency"),
                 "last_refreshed": newest_ts.date(),
+                "gics_sector": None,
             },
         )
 

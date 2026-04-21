@@ -14,6 +14,7 @@ class Settings:
     marketdata_token: str
     days: int
     api_sleep_seconds: float
+    anthropic_api_key: str = ""  # optional — used for AI sector classification
 
 
 def _load_from_file() -> dict:
@@ -39,6 +40,7 @@ def load_settings() -> Settings:
             marketdata_token=cfg["marketdata_token"],
             days=int(cfg.get("days", 1000)),
             api_sleep_seconds=float(cfg.get("api_sleep_seconds", 0.2)),
+            anthropic_api_key=cfg.get("anthropic_api_key", ""),
         )
     except KeyError as e:
         raise RuntimeError(f"Missing required config key: {e}") from e
