@@ -54,54 +54,46 @@ INDEX_OPTIONS = {
 
 
 def build_universe_sql(index_key: str) -> str:
-    # Normalize the universe into: symbol, group_name, index_name
-    # group_name is used as the treemap "sector/industry" bucket.
+    # Normalize the universe into: symbol, group_name, index_name.
+    # Sector always comes from assets.gics_sector (unified GICS standard).
     if index_key == "sp500":
         return """
-        SELECT
-            symbol,
-            COALESCE(NULLIF(gics_sector, ''), 'Unknown') AS group_name,
-            'S&P 500' AS index_name
-        FROM public.sp500_constituents
+        SELECT a.symbol,
+               COALESCE(a.gics_sector, 'Unknown') AS group_name,
+               'S&P 500' AS index_name
+        FROM public.assets a
+        JOIN public.sp500_constituents sc
+          ON sc.symbol = a.symbol AND sc.is_active IS NOT FALSE
         """
     if index_key == "nasdaq100":
         return """
-        SELECT
-            symbol,
-            COALESCE(icb_industry, 'Unknown') AS group_name,
-            'NASDAQ-100' AS index_name
-        FROM public.nasdaq100_constituents
+        SELECT a.symbol,
+               COALESCE(a.gics_sector, 'Unknown') AS group_name,
+               'NASDAQ-100' AS index_name
+        FROM public.assets a
+        JOIN public.nasdaq100_constituents nc
+          ON nc.symbol = a.symbol AND nc.is_active IS NOT FALSE
         """
     if index_key == "dow30":
         return """
-        SELECT
-            symbol,
-            COALESCE(industry, 'Unknown') AS group_name,
-            'Dow 30' AS index_name
-        FROM public.dow30_constituents
+        SELECT a.symbol,
+               COALESCE(a.gics_sector, 'Unknown') AS group_name,
+               'Dow 30' AS index_name
+        FROM public.assets a
+        JOIN public.dow30_constituents dc
+          ON dc.symbol = a.symbol AND dc.is_active IS NOT FALSE
         """
-    # union
+    # all indices — deduplicated at SQL level
     return """
-    SELECT symbol, group_name, index_name
-    FROM (
-        SELECT
-            symbol,
-            COALESCE(NULLIF(gics_sector, ''), 'Unknown') AS group_name,
-            'S&P 500' AS index_name
-        FROM public.sp500_constituents
-        UNION ALL
-        SELECT
-            symbol,
-            COALESCE(icb_industry, 'Unknown') AS group_name,
-            'NASDAQ-100' AS index_name
-        FROM public.nasdaq100_constituents
-        UNION ALL
-        SELECT
-            symbol,
-            COALESCE(industry, 'Unknown') AS group_name,
-            'Dow 30' AS index_name
-        FROM public.dow30_constituents
-    ) u
+    SELECT DISTINCT a.symbol,
+           COALESCE(a.gics_sector, 'Unknown') AS group_name,
+           'All' AS index_name
+    FROM public.assets a
+    WHERE a.symbol IN (
+        SELECT symbol FROM public.sp500_constituents   WHERE is_active IS NOT FALSE
+        UNION SELECT symbol FROM public.nasdaq100_constituents WHERE is_active IS NOT FALSE
+        UNION SELECT symbol FROM public.dow30_constituents    WHERE is_active IS NOT FALSE
+    )
     """
 
 

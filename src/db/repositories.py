@@ -9,9 +9,9 @@ import psycopg
 
 ASSET_UPSERT_SQL = """
 INSERT INTO public.assets (
-  symbol, name, exchange_code, exchange, asset_type, price_currency, last_refreshed, updated_at
+  symbol, name, exchange_code, exchange, asset_type, price_currency, last_refreshed, gics_sector, updated_at
 )
-VALUES (%(symbol)s, %(name)s, %(exchange_code)s, %(exchange)s, %(asset_type)s, %(price_currency)s, %(last_refreshed)s, now())
+VALUES (%(symbol)s, %(name)s, %(exchange_code)s, %(exchange)s, %(asset_type)s, %(price_currency)s, %(last_refreshed)s, %(gics_sector)s, now())
 ON CONFLICT (symbol)
 DO UPDATE SET
   name = EXCLUDED.name,
@@ -20,6 +20,7 @@ DO UPDATE SET
   asset_type = EXCLUDED.asset_type,
   price_currency = EXCLUDED.price_currency,
   last_refreshed = EXCLUDED.last_refreshed,
+  gics_sector = COALESCE(EXCLUDED.gics_sector, public.assets.gics_sector),
   updated_at = now();
 """
 
@@ -68,22 +69,28 @@ WHERE
 
 def fetch_sp500_symbols(conn: psycopg.Connection) -> list[str]:
     with conn.cursor() as cur:
-        cur.execute("SELECT symbol FROM public.sp500_constituents ORDER BY symbol;")
-        # cur.execute("select * from sp500_constituents where symbol = 'AAPL';")
+        cur.execute(
+            "SELECT symbol FROM public.sp500_constituents "
+            "WHERE is_active IS NOT FALSE ORDER BY symbol;"
+        )
         return [r[0] for r in cur.fetchall()]
 
 
 def fetch_nasdaq100_symbols(conn) -> list[str]:
-    q = "SELECT symbol FROM public.nasdaq100_constituents"
     with conn.cursor() as cur:
-        cur.execute(q)
+        cur.execute(
+            "SELECT symbol FROM public.nasdaq100_constituents "
+            "WHERE is_active IS NOT FALSE ORDER BY symbol;"
+        )
         return [r[0] for r in cur.fetchall()]
 
 
 def fetch_dow30_symbols(conn) -> list[str]:
-    q = "SELECT symbol FROM public.dow30_constituents"
     with conn.cursor() as cur:
-        cur.execute(q)
+        cur.execute(
+            "SELECT symbol FROM public.dow30_constituents "
+            "WHERE is_active IS NOT FALSE ORDER BY symbol;"
+        )
         return [r[0] for r in cur.fetchall()]
 
 
