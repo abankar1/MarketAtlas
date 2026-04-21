@@ -28,6 +28,7 @@ ibmOutput.json
 # IDE
 .vscode/
 .idea/
+.idea/
 *.swp
 *.swo
 
