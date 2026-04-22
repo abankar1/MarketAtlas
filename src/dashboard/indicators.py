@@ -1,6 +1,20 @@
 """
-Pure pandas technical indicator computations.
-No Streamlit, no DB dependencies — safe to import anywhere.
+Technical indicator computations — pure pandas, no Streamlit or DB dependencies.
+
+All functions accept a pd.Series of closing prices and return a pd.Series
+or pd.DataFrame aligned to the same index.
+
+Available indicators:
+    compute_sma(close, window)                  Simple Moving Average
+    compute_ema(close, window)                  Exponential Moving Average
+    compute_bollinger_bands(close, window, std)  Upper / mid / lower bands
+    compute_rsi(close, window)                  Relative Strength Index (0–100)
+
+Usage:
+    from src.dashboard.indicators import compute_sma, compute_rsi
+
+    sma20 = compute_sma(df["close"], window=20)
+    rsi14 = compute_rsi(df["close"], window=14)
 """
 from __future__ import annotations
 

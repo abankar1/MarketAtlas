@@ -1,3 +1,25 @@
+"""
+Marketstack API client — fetches end-of-day (EOD) OHLCV data.
+
+Requires a Marketstack access key (free tier supported).
+Configure via src/config/configuration.json as `marketdata_token`.
+
+Key methods:
+    fetch_daily(symbol, days)
+        Fetch the most recent N trading days for a symbol.
+        Used by DailyBarImporter for incremental daily updates.
+
+    fetch_daily_range(symbol, date_from, date_to)
+        Fetch EOD bars within an explicit date range.
+        Used by the 10-year backfill script.
+
+Usage:
+    from src.marketdata.client import MarketDataClient
+
+    client = MarketDataClient(token="your_access_key", sleep_s=0.2)
+    bars = client.fetch_daily("AAPL", days=30)
+    bars = client.fetch_daily_range("AAPL", date(2024, 1, 1), date(2024, 12, 31))
+"""
 from __future__ import annotations
 from pathlib import Path
 

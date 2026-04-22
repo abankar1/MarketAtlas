@@ -1,3 +1,14 @@
+"""
+Database connection factory.
+
+Usage:
+    from src.db.connection import connect
+    from src.config.settings import load_settings
+
+    settings = load_settings()
+    with connect(settings.db_url) as conn:
+        ...
+"""
 import psycopg
 
 

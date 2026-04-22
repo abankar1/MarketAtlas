@@ -1,3 +1,25 @@
+"""
+Application settings — loads src/config/configuration.json into a typed
+Settings dataclass.
+
+Config file location:
+    src/config/configuration.json   (git-ignored, never committed)
+    src/config/configuration.json.example  (safe placeholder, committed)
+
+Required fields:
+    db_url              PostgreSQL connection string
+    marketdata_token    Marketstack API access key
+
+Optional fields:
+    days                Days of history to fetch on incremental updates (default 1000)
+    api_sleep_seconds   Delay between Marketstack API calls (default 0.2)
+    anthropic_api_key   Anthropic API key for AI sector classification
+
+Usage:
+    from src.config.settings import load_settings
+    settings = load_settings()
+    print(settings.db_url)
+"""
 from dataclasses import dataclass
 from pathlib import Path
 import json

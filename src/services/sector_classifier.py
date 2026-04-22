@@ -7,8 +7,11 @@ and the constituent sync service can share the same logic.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import psycopg
+
+SECTORS_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "gics_sectors.json"
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +112,14 @@ def classify_via_api(
 # High-level helper
 # ---------------------------------------------------------------------------
 
+def _load_static_sectors() -> dict[str, str]:
+    """Load the static sector mapping from data/gics_sectors.json if it exists."""
+    if SECTORS_FILE.exists():
+        with open(SECTORS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+
 def ensure_sectors(
     conn: psycopg.Connection,
     new_symbols: list[tuple[str, str]],
@@ -119,9 +130,9 @@ def ensure_sectors(
     ``assets`` table.
 
     1. Skip symbols that already have a sector.
-    2. If *api_key* is provided, batch-classify the rest via Claude API.
-    3. Otherwise print a warning and leave them as NULL (dashboard shows
-       'Unknown').
+    2. Look up sectors from the static file ``data/gics_sectors.json``.
+    3. If *api_key* is provided, batch-classify any remaining via API.
+    4. Otherwise print a warning for symbols still unmapped.
 
     Returns the number of symbols that were classified.
     """
@@ -142,28 +153,49 @@ def ensure_sectors(
     if not missing:
         return 0
 
-    # Build the (symbol, name) pairs for only the missing ones
+    # --- Tier 1: static file lookup ---
+    static_map = _load_static_sectors()
+    count = 0
+
+    resolved = {s: static_map[s] for s in missing if s in static_map and static_map[s] in GICS_SECTORS}
+    if resolved:
+        print(f"  Classifying {len(resolved)} symbol(s) from static file...")
+        for sym, sector in resolved.items():
+            conn.execute(
+                "UPDATE public.assets SET gics_sector = %s WHERE symbol = %s AND gics_sector IS NULL;",
+                (sector, sym),
+            )
+            print(f"    {sym} -> {sector}")
+            count += 1
+        conn.commit()
+        missing -= resolved.keys()
+
+    if not missing:
+        return count
+
+    # --- Tier 2: API classification ---
     to_classify = [(s, n) for s, n in new_symbols if s in missing]
 
     if not api_key:
         print(
-            f"  WARNING: {len(to_classify)} new symbol(s) need sector classification "
-            f"but no anthropic_api_key configured: {[s for s, _ in to_classify]}"
+            f"  WARNING: {len(to_classify)} new symbol(s) need sector classification. "
+            f"Add them to data/gics_sectors.json and run: python -m src.load_sectors"
         )
-        return 0
+        for s, _ in to_classify:
+            print(f"    {s}")
+        return count
 
-    print(f"  Classifying {len(to_classify)} new symbol(s) via Claude API...")
+    print(f"  Classifying {len(to_classify)} remaining symbol(s) via API...")
 
     try:
         classifications = classify_via_api(to_classify, api_key)
     except ImportError as e:
         print(f"  WARNING: {e}")
-        return 0
+        return count
     except Exception as e:
-        print(f"  ERROR during AI classification: {e}")
-        return 0
+        print(f"  ERROR during API classification: {e}")
+        return count
 
-    count = 0
     for sym, sector in classifications.items():
         conn.execute(
             "UPDATE public.assets SET gics_sector = %s WHERE symbol = %s AND gics_sector IS NULL;",

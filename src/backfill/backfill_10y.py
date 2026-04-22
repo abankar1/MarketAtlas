@@ -1,3 +1,24 @@
+"""
+Historical backfill — fetches up to N years of daily OHLCV bars for every
+active symbol across S&P 500, NASDAQ-100, and Dow 30.
+
+Run once on a fresh database after loading constituents.  Safe to re-run —
+only fetches the date range that is missing for each symbol (incremental).
+
+Usage:
+    # Default: 10 years of history
+    python -m src.backfill.backfill_10y
+
+    # Custom window
+    python -m src.backfill.backfill_10y --years 5
+
+Reads from:
+    src/config/configuration.json  (db_url, marketdata_token)
+
+Writes to:
+    public.assets       — upserts metadata row for each symbol
+    public.daily_bars   — upserts OHLCV rows
+"""
 from __future__ import annotations
 import datetime as dt
 import psycopg

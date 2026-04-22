@@ -1,3 +1,24 @@
+"""
+Market Atlas — Streamlit dashboard.
+
+Displays an interactive heatmap treemap of index constituents colored by
+return %, and a per-stock candlestick chart with technical indicator overlays.
+
+Usage:
+    streamlit run src/dashboard/app.py
+
+Reads from:
+    src/config/configuration.json  (db_url)
+    public.assets                  (symbol, gics_sector)
+    public.daily_bars              (OHLCV time-series)
+    public.sp500_constituents      (S&P 500 membership)
+    public.nasdaq100_constituents  (NASDAQ-100 membership)
+    public.dow30_constituents      (Dow 30 membership)
+
+Dashboard panels:
+    Heatmap     — treemap tiles sized by dollar volume, colored by return %
+    Stock detail — candlestick chart with SMA 20/50, EMA 20, Bollinger Bands, RSI 14
+"""
 from __future__ import annotations
 
 import datetime as dt

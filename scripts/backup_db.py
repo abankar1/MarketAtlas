@@ -1,3 +1,30 @@
+"""
+Database backup utility.
+
+Creates a timestamped snapshot of the main tables inside the database itself
+(in a dedicated `backup` schema) and optionally writes a pg_dump file to disk.
+
+Usage:
+    # Snapshot tables only (writes to backup schema in DB)
+    python -m scripts.backup_db
+
+    # Snapshot + pg_dump to ./backups/
+    python -m scripts.backup_db --dump
+
+    # Snapshot + pg_dump to a custom directory
+    python -m scripts.backup_db --dump --dump-dir /path/to/backups
+
+    # Use a custom timestamp suffix (default: YYYY_MM_DD_HHMM)
+    python -m scripts.backup_db --stamp 2026_04_21_1200
+
+Snapshot tables created:
+    backup.assets_<stamp>
+    backup.daily_bars_<stamp>
+    backup.sp500_constituents_<stamp>
+
+pg_dump file (if --dump):
+    <dump-dir>/market_timeseries_<stamp>.dump
+"""
 from __future__ import annotations
 
 import argparse

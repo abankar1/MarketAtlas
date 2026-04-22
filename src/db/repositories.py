@@ -1,3 +1,27 @@
+"""
+Database access layer — all SQL queries for the market data schema.
+
+All public functions accept a psycopg.Connection and return plain Python
+objects (lists, dicts, DataFrames).  No business logic lives here.
+
+Key functions:
+    upsert_asset(conn, asset_row)           Insert/update a row in public.assets
+    upsert_daily_bars(conn, bars)           Bulk upsert OHLCV rows into public.daily_bars
+    upsert_nasdaq_constituents(conn, rows)  Upsert NASDAQ-100 membership rows
+    upsert_dow_constituents(conn, rows)     Upsert Dow 30 membership rows
+    fetch_sp500_symbols(conn)               Active S&P 500 tickers
+    fetch_nasdaq100_symbols(conn)           Active NASDAQ-100 tickers
+    fetch_dow30_symbols(conn)               Active Dow 30 tickers
+    fetch_ohlcv(conn, symbol, date_from, date_to)  OHLCV DataFrame for a symbol
+
+Usage:
+    from src.db.connection import connect
+    from src.db import repositories
+
+    with connect(db_url) as conn:
+        symbols = repositories.fetch_sp500_symbols(conn)
+        repositories.upsert_daily_bars(conn, bars)
+"""
 from __future__ import annotations
 
 import datetime as dt

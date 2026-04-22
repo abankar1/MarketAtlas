@@ -1,3 +1,23 @@
+"""
+Incremental daily bar importer for any symbol.
+
+Determines how many days of data are missing for each symbol (by checking
+the latest stored bar date), fetches only the gap from Marketstack, and
+upserts the result into public.daily_bars.
+
+Key class:
+    DailyBarImporter(conn, client)
+        .import_symbol(symbol, days=1000) -> int
+            Returns the number of bar rows upserted.
+
+Usage:
+    from src.services.daily_bar_importer import DailyBarImporter
+    from src.marketdata.client import MarketDataClient
+
+    client = MarketDataClient(token=settings.marketdata_token)
+    importer = DailyBarImporter(conn=conn, client=client)
+    n = importer.import_symbol("AAPL", days=settings.days)
+"""
 from __future__ import annotations
 
 import datetime as dt
