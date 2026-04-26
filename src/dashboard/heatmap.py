@@ -6,6 +6,7 @@ render_heatmap_tab(df, color_range, range_label, index_key, date_from, date_to)
 render_ranked_table(df, color_range)
     ranked table helper (symbol, name, sector, return %, percentile, volume).
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -22,6 +23,7 @@ from src.dashboard.charts import build_fig
 # ---------------------------------------------------------------------------
 # Ranked table
 # ---------------------------------------------------------------------------
+
 
 def _cell_t(val: float, vmin: float, vmax: float, midpoint: float) -> float:
     """
@@ -49,9 +51,9 @@ _SEQUENTIAL_SCALES = {"Viridis", "Plasma", "Inferno", "Magma", "Cividis"}
 
 # label → Plotly colorscale name (shown in the heatmap tab controls)
 _PALETTE_OPTIONS: dict[str, str] = {
-    "RdYlGn (default)":       "RdYlGn",
+    "RdYlGn (default)": "RdYlGn",
     "RdBu (colorblind-safe)": "RdBu",
-    "Viridis (sequential)":   "Viridis",
+    "Viridis (sequential)": "Viridis",
 }
 
 
@@ -69,27 +71,36 @@ def render_ranked_table(
     midpoint settings as the treemap.
     Percentile column shows a CSS bar from red (0) to green (100).
     """
-    tdf = df[[
-        "symbol", "name", "group_name",
-        "return_pct", "dollar_volume", "end_volume",
-        "start_close", "end_close",
-    ]].copy()
+    tdf = df[
+        [
+            "symbol",
+            "name",
+            "group_name",
+            "return_pct",
+            "dollar_volume",
+            "end_volume",
+            "start_close",
+            "end_close",
+        ]
+    ].copy()
 
-    tdf["percentile_rank"] = (tdf["return_pct"].rank(ascending=True) / len(tdf) * 100)
+    tdf["percentile_rank"] = tdf["return_pct"].rank(ascending=True) / len(tdf) * 100
     tdf = tdf.sort_values("return_pct", ascending=False).reset_index(drop=True)
     tdf.index = tdf.index + 1  # 1-based rank
 
-    tdf = tdf.rename(columns={
-        "symbol":          "Symbol",
-        "name":            "Name",
-        "group_name":      "Sector",
-        "return_pct":      "Return %",
-        "percentile_rank": "Percentile",
-        "dollar_volume":   "Dollar Volume",
-        "end_volume":      "Volume",
-        "start_close":     "Start Close",
-        "end_close":       "End Close",
-    })
+    tdf = tdf.rename(
+        columns={
+            "symbol": "Symbol",
+            "name": "Name",
+            "group_name": "Sector",
+            "return_pct": "Return %",
+            "percentile_rank": "Percentile",
+            "dollar_volume": "Dollar Volume",
+            "end_volume": "Volume",
+            "start_close": "Start Close",
+            "end_close": "End Close",
+        }
+    )
 
     vmin, vmax = color_range
     is_sequential = color_scale in _SEQUENTIAL_SCALES
@@ -105,17 +116,18 @@ def render_ranked_table(
         return f"background-color: {rgb}; color: {_contrast(rgb)}"
 
     styled = (
-        tdf.style
-        .map(_return_cell_style, subset=["Return %"])
+        tdf.style.map(_return_cell_style, subset=["Return %"])
         .bar(subset=["Percentile"], color=["#ef5350", "#26a69a"], vmin=0, vmax=100)
-        .format({
-            "Return %":      "{:+.2f}%",
-            "Percentile":    "{:.0f}",
-            "Dollar Volume": "${:,.0f}",
-            "Volume":        "{:,.0f}",
-            "Start Close":   "${:.2f}",
-            "End Close":     "${:.2f}",
-        })
+        .format(
+            {
+                "Return %": "{:+.2f}%",
+                "Percentile": "{:.0f}",
+                "Dollar Volume": "${:,.0f}",
+                "Volume": "{:,.0f}",
+                "Start Close": "${:.2f}",
+                "End Close": "${:.2f}",
+            }
+        )
     )
 
     st.caption(
@@ -129,6 +141,7 @@ def render_ranked_table(
 # Date-range guard
 # ---------------------------------------------------------------------------
 
+
 def _exceeds_three_months(d_from: dt.date, d_to: dt.date) -> bool:
     """
     Return True if d_to is strictly more than 3 calendar months after d_from.
@@ -139,7 +152,7 @@ def _exceeds_three_months(d_from: dt.date, d_to: dt.date) -> bool:
         Jan 31 → Apr 30  →  False  (3-month cutoff clamped to last day of April)
     """
     target_month = d_from.month + 3
-    target_year  = d_from.year + (target_month - 1) // 12
+    target_year = d_from.year + (target_month - 1) // 12
     target_month = (target_month - 1) % 12 + 1
     try:
         cutoff = d_from.replace(year=target_year, month=target_month)
@@ -152,6 +165,7 @@ def _exceeds_three_months(d_from: dt.date, d_to: dt.date) -> bool:
 # ---------------------------------------------------------------------------
 # CSV export helper
 # ---------------------------------------------------------------------------
+
 
 def _build_export_csv(df: pd.DataFrame) -> bytes:
     """
@@ -174,6 +188,7 @@ def _build_export_csv(df: pd.DataFrame) -> bytes:
 # ---------------------------------------------------------------------------
 # Tab entry point
 # ---------------------------------------------------------------------------
+
 
 def render_heatmap_tab(
     df: pd.DataFrame,
@@ -199,7 +214,7 @@ def render_heatmap_tab(
     if "heatmap_clip" not in st.session_state:
         st.session_state["heatmap_clip"] = 10
 
-    _f_col, _clip_col, _pal_col, _cz_col = st.columns([4, 2, 3, 1.5])
+    _f_col, _clip_col, _pal_col, _cz_col = st.columns([3, 2, 2, 2], gap="large")
 
     with _f_col:
         selected_sectors = st.multiselect(
@@ -210,16 +225,20 @@ def render_heatmap_tab(
             label_visibility="collapsed",
         )
     clip = _clip_col.slider(
-        "Clip ±%", min_value=1, max_value=50,
+        "Clip ±%",
+        min_value=1,
+        max_value=50,
         key="heatmap_clip",
         help="Return % values beyond ±X are clamped to the color boundary.",
     )
     color_range = (-float(clip), float(clip))
-    color_scale = _PALETTE_OPTIONS[_pal_col.selectbox(
-        "Color palette",
-        list(_PALETTE_OPTIONS.keys()),
-        key="color_palette",
-    )]
+    color_scale = _PALETTE_OPTIONS[
+        _pal_col.selectbox(
+            "Color palette",
+            list(_PALETTE_OPTIONS.keys()),
+            key="color_palette",
+        )
+    ]
     center_zero = _cz_col.toggle(
         "Center on 0%",
         value=True,
@@ -235,13 +254,17 @@ def render_heatmap_tab(
         df = df[df["group_name"].isin(selected_sectors)].copy()
 
     if df.empty:
-        st.info("No data for the selected sectors — clear the filter to see all symbols.")
+        st.info(
+            "No data for the selected sectors — clear the filter to see all symbols."
+        )
         return
 
     # KPI row
     cols = st.columns(4)
     cols[0].metric("Symbols", f"{len(df)}")
-    cols[1].metric(f"Median return ({range_label})", f"{df['return_pct'].median():.2f}%")
+    cols[1].metric(
+        f"Median return ({range_label})", f"{df['return_pct'].median():.2f}%"
+    )
     cols[2].metric(
         f"Best ({range_label})",
         f"{df.loc[df['return_pct'].idxmax(), 'symbol']} ({df['return_pct'].max():.2f}%)",
@@ -293,8 +316,12 @@ def render_heatmap_tab(
     # --- end CSV export ---
 
     if view_toggle == "Treemap":
-        fig = build_fig(df, color_range=color_range,
-                        color_scale=color_scale, center_zero=center_zero)
+        fig = build_fig(
+            df,
+            color_range=color_range,
+            color_scale=color_scale,
+            center_zero=center_zero,
+        )
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
         with st.expander("Show raw data"):
@@ -303,4 +330,6 @@ def render_heatmap_tab(
                 use_container_width=True,
             )
     else:
-        render_ranked_table(df, color_range, color_scale=color_scale, center_zero=center_zero)
+        render_ranked_table(
+            df, color_range, color_scale=color_scale, center_zero=center_zero
+        )
