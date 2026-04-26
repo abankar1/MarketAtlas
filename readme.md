@@ -138,13 +138,17 @@ source .venv/bin/activate
 streamlit run src/dashboard/app.py
 ```
 
-Features:
-- **Heatmap** — treemap tiles sized by dollar volume, colored by return % (green gain / red loss)
-- **Stock Detail** — per-stock candlestick chart with toggleable overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI 14)
+Three tabs, all driven by the same sidebar filters:
+
+- **Heatmap** — treemap tiles sized by dollar volume, colored by return % (green gain / red loss); KPIs; sortable raw data table
+- **Sector Synopsis** — ranked bar chart for one sector with inline per-stock candlestick on click
+- **Stock Detail** — full per-stock candlestick with toggleable technical overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI, MACD, ATR, OBV)
+
+Sidebar controls:
 - Index selector: S&P 500 | NASDAQ-100 | Dow 30 | All
-- Date range picker with presets (3m, 6m, 1y, 2y, YTD) or custom dates
-- KPIs: median return, best/worst performer, symbol count
-- In-memory LRU cache to avoid repeated DB queries
+- Date range: preset buttons (3M, 6M, 1Y, 2Y, YTD) or custom date pickers
+- Color clip slider for heatmap scale
+- In-memory LRU cache stats + clear button
 
 ---
 
@@ -227,15 +231,21 @@ Market Atlas/
 │   │   ├── daily_bar_importer.py       # incremental OHLCV importer
 │   │   └── sector_classifier.py        # GICS sector classification (Claude API)
 │   ├── dashboard/
-│   │   ├── app.py                      # Streamlit UI (heatmap + stock detail)
-│   │   └── indicators.py              # SMA, EMA, RSI, Bollinger Bands
+│   │   ├── app.py                      # Streamlit entry point — sidebar + nav
+│   │   ├── data.py                     # DB queries + LRU caches
+│   │   ├── charts.py                   # Plotly figure builders
+│   │   ├── indicators.py               # SMA, EMA, Bollinger, RSI, MACD, ATR, OBV
+│   │   ├── heatmap.py                  # Heatmap tab
+│   │   ├── sector_synopsis.py          # Sector Synopsis tab
+│   │   └── stock_detail.py             # Stock Detail tab
 │   ├── backfill/
 │   │   └── backfill_10y.py
 │   ├── main.py                         # Daily update orchestrator
-│   └── sync_constituents.py           # Constituent sync entry point
+│   └── sync_constituents.py            # Constituent sync entry point
+├── docs/
+│   └── user-guide.md                   # Dashboard user guide
 ├── scripts/
-│   ├── backup_db.py                    # pg_dump + snapshot utility
-│   └── migrate_add_sector.py          # One-time GICS sector migration
+│   └── backup_db.py                    # pg_dump + snapshot utility
 ├── TimescaleDbCheatsheet.txt           # Database setup SQL + reference
 └── readme.md
 ```
