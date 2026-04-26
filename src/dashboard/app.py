@@ -118,7 +118,7 @@ def _on_tab_click(tab_name: str) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    st.set_page_config(page_title="Market Heatmap", layout="wide")
+    st.set_page_config(page_title="Market Atlas", layout="wide")
     st.markdown(
         "<style>"
         ".block-container { padding-top: 1rem; padding-bottom: 0.5rem; }"
@@ -127,7 +127,8 @@ def main() -> None:
         "</style>",
         unsafe_allow_html=True,
     )
-    st.title("Market Heatmap Dashboard")
+    st.title("Market Atlas")
+    st.caption("Interactive Market Intelligence Dashboard")
 
     cfg = load_config()
     db_url = (cfg.get("db_url") or "").strip()

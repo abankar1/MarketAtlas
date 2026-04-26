@@ -184,7 +184,7 @@ def render_heatmap_tab(
 ) -> None:
     """Render the full Heatmap tab: sector filter, color controls, KPI row, view toggle, treemap or ranked table."""
     # ------------------------------------------------------------------
-    # Sector filter (in-memory — no new DB query)
+    # Controls row — sector filter + color settings (one compact line)
     # ------------------------------------------------------------------
     all_sectors = sorted(df["group_name"].dropna().unique().tolist())
 
@@ -196,39 +196,31 @@ def render_heatmap_tab(
     if _clamped != _stored:
         st.session_state["heatmap_sector_filter"] = _clamped
 
-    selected_sectors = st.multiselect(
-        "Sectors",
-        options=all_sectors,
-        key="heatmap_sector_filter",
-        placeholder="All sectors",
-    )
-    if selected_sectors:
-        df = df[df["group_name"].isin(selected_sectors)].copy()
-
-    if df.empty:
-        st.info("No data for the selected sectors — clear the filter to see all symbols.")
-        return
-
-    # ------------------------------------------------------------------
-    # Color controls (heatmap-specific — clip range, palette, midpoint)
-    # ------------------------------------------------------------------
     if "heatmap_clip" not in st.session_state:
         st.session_state["heatmap_clip"] = 10
 
-    _cc1, _cc2, _cc3 = st.columns([3, 3, 2])
-    clip = _cc1.slider(
+    _f_col, _clip_col, _pal_col, _cz_col = st.columns([4, 2, 3, 1.5])
+
+    with _f_col:
+        selected_sectors = st.multiselect(
+            "Sectors",
+            options=all_sectors,
+            key="heatmap_sector_filter",
+            placeholder="All sectors",
+            label_visibility="collapsed",
+        )
+    clip = _clip_col.slider(
         "Clip ±%", min_value=1, max_value=50,
         key="heatmap_clip",
         help="Return % values beyond ±X are clamped to the color boundary.",
     )
     color_range = (-float(clip), float(clip))
-
-    color_scale = _PALETTE_OPTIONS[_cc2.selectbox(
+    color_scale = _PALETTE_OPTIONS[_pal_col.selectbox(
         "Color palette",
         list(_PALETTE_OPTIONS.keys()),
         key="color_palette",
     )]
-    center_zero = _cc3.toggle(
+    center_zero = _cz_col.toggle(
         "Center on 0%",
         value=True,
         key="center_zero",
@@ -238,6 +230,13 @@ def render_heatmap_tab(
             "relative out/under-performers on broadly trending days."
         ),
     )
+
+    if selected_sectors:
+        df = df[df["group_name"].isin(selected_sectors)].copy()
+
+    if df.empty:
+        st.info("No data for the selected sectors — clear the filter to see all symbols.")
+        return
 
     # KPI row
     cols = st.columns(4)
