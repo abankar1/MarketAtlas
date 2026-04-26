@@ -123,9 +123,15 @@ def _render_breadth_bar(breadth: pd.DataFrame) -> None:
     st.subheader("Sector Breadth")
     st.caption(
         f"% of stocks with a positive return · {len(breadth)} sectors · "
-        "dotted line = 50%"
+        "dotted line = 50% · click a bar to drill into that sector"
     )
-    st.plotly_chart(fig, use_container_width=True, theme=None)
+    return st.plotly_chart(
+        fig,
+        use_container_width=True,
+        theme=None,
+        on_select="rerun",
+        key="breadth_bar",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +205,14 @@ def render_sector_synopsis(
         marker_color=bar_colors,
         text=[f"{r:+.2f}%" for r in sdf["return_pct"]],
         textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Return: %{x:.2f}%<br><extra></extra>",
+        customdata=sdf[["name", "start_close", "end_close", "dollar_volume"]].values,
+        hovertemplate=(
+            "<b>%{y}</b>  %{customdata[0]}<br>"
+            "Return: <b>%{x:+.2f}%</b><br>"
+            "Start: $%{customdata[1]:.2f} → End: $%{customdata[2]:.2f}<br>"
+            "Dollar volume: $%{customdata[3]:,.0f}"
+            "<extra></extra>"
+        ),
     ))
 
     fig.add_vline(x=0, line_color="white", line_width=1)
@@ -304,9 +317,33 @@ def render_sector_synopsis_tab(
         return
 
     # Cross-sector overview — all sectors sorted by breadth
-    _render_breadth_bar(_compute_sector_breadth(df))
+    # on_select="rerun" fires when user clicks a bar; we latch the value into
+    # synopsis_sector so the dropdown below reflects the click.
+    # _breadth_applied tracks the last value we pushed from the chart so that
+    # normal page reruns (e.g. date change) don't re-override a manual dropdown
+    # selection — the latch is cleared whenever the dropdown diverges from it.
+    _breadth_event = _render_breadth_bar(_compute_sector_breadth(df))
+    _clicked_pts   = (_breadth_event.selection or {}).get("points", [])
+
+    if _clicked_pts:
+        _clicked_sector = _clicked_pts[0].get("y")
+        if (_clicked_sector
+                and _clicked_sector in sectors
+                and _clicked_sector != st.session_state.get("_breadth_applied")):
+            st.session_state["_breadth_applied"] = _clicked_sector
+            st.session_state["synopsis_sector"]  = _clicked_sector
+    else:
+        # Bar was deselected — release the latch so re-clicking the same bar works
+        st.session_state.pop("_breadth_applied", None)
 
     st.divider()
 
     selected_sector = st.selectbox("Select sector", sectors, key="synopsis_sector")
+
+    # If the user overrode the breadth selection via the dropdown, clear the latch
+    # so a future click on the same bar can re-apply it.
+    if (st.session_state.get("_breadth_applied")
+            and selected_sector != st.session_state.get("_breadth_applied")):
+        st.session_state.pop("_breadth_applied", None)
+
     render_sector_synopsis(df, selected_sector, range_label, db_url, date_from, date_to)
