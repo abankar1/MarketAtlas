@@ -22,6 +22,22 @@ from src.dashboard.data import get_ohlcv_cached
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _fmt_dollar(v: float) -> str:
+    """Compact dollar formatter: $1.2B / $450.3M / $12.5K / $999."""
+    a = abs(v)
+    if a >= 1e9:
+        return f"${v/1e9:.1f}B"
+    if a >= 1e6:
+        return f"${v/1e6:.1f}M"
+    if a >= 1e3:
+        return f"${v/1e3:.1f}K"
+    return f"${v:,.0f}"
+
+
+# ---------------------------------------------------------------------------
 # Fragment — bar chart + inline detail
 # ---------------------------------------------------------------------------
 
@@ -57,12 +73,15 @@ def render_sector_synopsis(
     worst       = sdf.iloc[-1]
 
     # KPI row
-    k = st.columns(5)
+    # range_label shown once as caption; removed from individual metric headings
+    # to prevent truncation. Column widths weighted by content needs.
+    st.caption(f"Period: {range_label}")
+    k = st.columns([0.7, 1.6, 1.6, 1.4, 1.7])
     k[0].metric("Stocks", len(sdf))
-    k[1].metric(f"Median return ({range_label})", f"{median_ret:+.2f}%")
-    k[2].metric(f"Avg return ({range_label})", f"{avg_ret:+.2f}%")
+    k[1].metric("Median return", f"{median_ret:+.2f}%")
+    k[2].metric("Avg return",    f"{avg_ret:+.2f}%")
     k[3].metric("Gainers / Losers", f"{gainers} / {losers}")
-    k[4].metric("Total dollar volume", f"${total_dvol:,.0f}")
+    k[4].metric("Total dollar volume", _fmt_dollar(total_dvol))
 
     st.markdown("---")
 

@@ -186,47 +186,46 @@ def main() -> None:
         st.session_state["date_from"] = max(min_day, min(d_from, end_max_day))
         st.session_state["date_to"]   = max(min_day, min(d_to,   end_max_day))
 
-    # Clamp to available bounds; pass as value= (not key=) so preset callbacks
-    # always win over any stale widget-internal state.
-    _cur_from = max(min_day, min(st.session_state["date_from"], end_max_day))
-    _cur_to   = max(min_day, min(st.session_state["date_to"],   end_max_day))
+    # Clamp stored dates to available bounds BEFORE the key= widgets render.
+    # (Writing to session_state[key] after the widget renders raises an error.)
+    _clamped_from = max(min_day, min(st.session_state["date_from"], end_max_day))
+    _clamped_to   = max(min_day, min(st.session_state["date_to"],   end_max_day))
+    if _clamped_from != st.session_state["date_from"]:
+        st.session_state["date_from"] = _clamped_from
+    if _clamped_to != st.session_state["date_to"]:
+        st.session_state["date_to"] = _clamped_to
 
     st.sidebar.subheader("Date range")
     date_from = st.sidebar.date_input(
         "Start date",
-        value=_cur_from,
+        key="date_from",
         min_value=min_day,
         max_value=max_day,
         help=f"Available data: {min_day} to {max_day}",
     )
     date_to = st.sidebar.date_input(
         "End date",
-        value=_cur_to,
+        key="date_to",
         min_value=min_day,
         max_value=end_max_day,
         help=f"Available data: {min_day} to {end_max_day}",
     )
 
-    # Detect manual date edits → clear preset highlight
-    if date_from != _cur_from or date_to != _cur_to:
-        st.session_state["active_preset"] = None
-
-    # Sync session_state for the next rerun and for callbacks
-    st.session_state["date_from"] = date_from
-    st.session_state["date_to"]   = date_to
+    # Clear preset highlight if the user manually edited either date.
+    # Preset button callbacks set active_preset before the rerun, so if
+    # the current dates no longer match what that preset would produce,
+    # the user must have overridden them manually.
+    _active_preset = st.session_state.get("active_preset")
+    if _active_preset and _active_preset in _DATE_PRESETS:
+        _exp_from, _exp_to = _preset_dates(_active_preset)
+        _exp_from = max(min_day, min(_exp_from, end_max_day))
+        _exp_to   = max(min_day, min(_exp_to,   end_max_day))
+        if date_from != _exp_from or date_to != _exp_to:
+            st.session_state["active_preset"] = None
 
     if date_from > date_to:
         st.error("Start date must be ≤ end date.")
         st.stop()
-
-    # Clamp queried range to available data (defensive; usually a no-op)
-    clamped_from = max(min_day, min(date_from, max_day))
-    clamped_to   = max(min_day, min(date_to,   end_max_day))
-    if (clamped_from, clamped_to) != (date_from, date_to):
-        st.info(f"Clamped date range to available data: {min_day} to {max_day}.")
-        date_from, date_to = clamped_from, clamped_to
-        st.session_state["date_from"] = date_from
-        st.session_state["date_to"]   = date_to
 
     # Human-readable label used in KPI headings
     _active_preset = st.session_state.get("active_preset")
@@ -304,7 +303,7 @@ def main() -> None:
     _active_tab = st.session_state["active_tab"]
 
     if _active_tab == "Heatmap":
-        render_heatmap_tab(df, color_range, range_label)
+        render_heatmap_tab(df, color_range, range_label, index_key, date_from, date_to)
 
     elif _active_tab == "Sector Synopsis":
         render_sector_synopsis_tab(df, range_label, db_url, date_from, date_to)
