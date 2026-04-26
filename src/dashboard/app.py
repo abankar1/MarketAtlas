@@ -31,6 +31,7 @@ from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
+import plotly.colors as pc
 import plotly.express as px
 import plotly.graph_objects as go
 import psycopg
@@ -638,15 +639,17 @@ def render_ranked_table(df: pd.DataFrame, color_range: tuple[float, float]) -> N
 
     vmin, vmax = color_range
 
+    def _return_cell_style(val: float) -> str:
+        """Map a return % value to a RdYlGn cell background using Plotly (no matplotlib)."""
+        span = vmax - vmin
+        t = max(0.0, min(1.0, (val - vmin) / span)) if span else 0.5
+        rgb = pc.sample_colorscale("RdYlGn", [t])[0]  # "rgb(r, g, b)"
+        return f"background-color: {rgb}; color: black"
+
     styled = (
         tdf.style
-        # Same RdYlGn palette + clip range as the treemap
-        .background_gradient(
-            cmap="RdYlGn",
-            subset=["Return %"],
-            vmin=vmin,
-            vmax=vmax,
-        )
+        # Same RdYlGn palette + clip range as the treemap — no matplotlib needed
+        .map(_return_cell_style, subset=["Return %"])
         # Horizontal bar for percentile: red at 0, green at 100
         .bar(
             subset=["Percentile"],
