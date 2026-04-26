@@ -15,7 +15,18 @@ import pandas as pd
 import streamlit as st
 
 from src.dashboard.charts import build_detail_fig
-from src.dashboard.data import get_ohlcv_cached
+from src.dashboard.data import fetch_index_overlap, get_ohlcv_cached
+
+
+_INDEX_BADGE_STYLE = (
+    "display:inline-block;padding:2px 10px;border-radius:12px;"
+    "font-size:0.78em;font-weight:600;margin-right:6px;color:white;"
+)
+_INDEX_BADGES = [
+    ("in_sp500",    "S&P 500",    "#1565C0"),
+    ("in_nasdaq100","NASDAQ-100", "#6A1B9A"),
+    ("in_dow30",    "Dow 30",     "#00695C"),
+]
 
 
 def _exceeds_three_months(d_from: dt.date, d_to: dt.date) -> bool:
@@ -78,6 +89,19 @@ def render_stock_detail(
 
     selected_symbol = symbol_map[selected_display]
     st.session_state["detail_selected_ticker"] = selected_symbol
+
+    # Index membership badges (cached — no extra DB call)
+    _overlap = fetch_index_overlap(db_url)
+    _sym_row = _overlap[_overlap["symbol"] == selected_symbol]
+    if not _sym_row.empty:
+        _row = _sym_row.iloc[0]
+        _html = "".join(
+            f'<span style="{_INDEX_BADGE_STYLE}background:{color}">{label}</span>'
+            for col, label, color in _INDEX_BADGES
+            if _row[col]
+        )
+        if _html:
+            st.markdown(_html, unsafe_allow_html=True)
 
     active_indicators = st.multiselect(
         "Overlays",

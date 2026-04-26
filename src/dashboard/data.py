@@ -157,6 +157,40 @@ def fetch_treemap_data(
     return df.dropna(subset=["return_pct", "dollar_volume"])
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_index_overlap(db_url: str) -> pd.DataFrame:
+    """
+    Return one row per active symbol with boolean index-membership flags.
+
+    Columns: symbol, name, sector, in_sp500 (bool), in_nasdaq100 (bool), in_dow30 (bool)
+
+    Cached for 1 hour — constituent membership is stable between daily syncs.
+    Zero new columns are needed; the three constituent tables are left-joined.
+    """
+    q = """
+    SELECT
+        a.symbol,
+        COALESCE(a.name, a.symbol)         AS name,
+        COALESCE(a.gics_sector, 'Unknown') AS sector,
+        (sp.symbol IS NOT NULL)            AS in_sp500,
+        (nd.symbol IS NOT NULL)            AS in_nasdaq100,
+        (dw.symbol IS NOT NULL)            AS in_dow30
+    FROM public.assets a
+    LEFT JOIN public.sp500_constituents sp
+        ON a.symbol = sp.symbol AND sp.is_active IS NOT FALSE
+    LEFT JOIN public.nasdaq100_constituents nd
+        ON a.symbol = nd.symbol AND nd.is_active IS NOT FALSE
+    LEFT JOIN public.dow30_constituents dw
+        ON a.symbol = dw.symbol AND dw.is_active IS NOT FALSE
+    WHERE sp.symbol IS NOT NULL
+       OR nd.symbol IS NOT NULL
+       OR dw.symbol IS NOT NULL
+    ORDER BY a.symbol
+    """
+    with connect(db_url) as conn:
+        return pd.read_sql(q, conn)
+
+
 @st.cache_data(show_spinner=False, ttl=60)
 def fetch_available_date_bounds(
     db_url: str, index_key: str

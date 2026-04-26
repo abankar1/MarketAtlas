@@ -36,6 +36,7 @@ from src.dashboard.data import (  # noqa: E402
     get_treemap_data_cached,
 )
 from src.dashboard.heatmap import render_heatmap_tab  # noqa: E402
+from src.dashboard.index_overlap import render_index_overlap_tab  # noqa: E402
 from src.dashboard.sector_synopsis import render_sector_synopsis_tab  # noqa: E402
 from src.dashboard.stock_detail import render_stock_detail  # noqa: E402
 
@@ -280,7 +281,7 @@ def main() -> None:
     # Session-state buttons replace st.tabs, which resets to tab 0 on every
     # full page rerun in Streamlit 1.53 (key= parameter not supported).
     # -----------------------------------------------------------------------
-    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail"]
+    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "Index Overlap"]
     if "active_tab" not in st.session_state:
         st.session_state["active_tab"] = "Heatmap"
 
@@ -310,6 +311,9 @@ def main() -> None:
 
     elif _active_tab == "Stock Detail":
         render_stock_detail(df, db_url, date_from, date_to)
+
+    elif _active_tab == "Index Overlap":
+        render_index_overlap_tab(db_url)
 
 
 if __name__ == "__main__":
