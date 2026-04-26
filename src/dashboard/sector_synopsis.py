@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pandas as pd
+import plotly.colors as pc
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as st_components
@@ -25,6 +27,14 @@ from src.dashboard.data import get_ohlcv_cached
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Maps session_state color_palette label → Plotly colorscale name
+_PALETTE_MAP: dict[str, str] = {
+    "RdYlGn (default)":       "RdYlGn",
+    "RdBu (colorblind-safe)": "RdBu",
+    "Viridis (sequential)":   "Viridis",
+}
+
+
 def _fmt_dollar(v: float) -> str:
     """Compact dollar formatter: $1.2B / $450.3M / $12.5K / $999."""
     a = abs(v)
@@ -35,6 +45,87 @@ def _fmt_dollar(v: float) -> str:
     if a >= 1e3:
         return f"${v/1e3:.1f}K"
     return f"${v:,.0f}"
+
+
+# ---------------------------------------------------------------------------
+# Cross-sector breadth helpers
+# ---------------------------------------------------------------------------
+
+
+def _compute_sector_breadth(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a DataFrame with one row per sector:
+      group_name, breadth_pct (0-100), n_up, n_total.
+    Sorted ascending by breadth_pct (for horizontal bar — lowest at bottom).
+    """
+    grp = df.groupby("group_name")["return_pct"]
+    result = pd.DataFrame({
+        "breadth_pct": grp.apply(lambda s: (s > 0).mean() * 100),
+        "n_up":        grp.apply(lambda s: int((s > 0).sum())),
+        "n_total":     grp.count(),
+    }).reset_index()
+    return result.sort_values("breadth_pct", ascending=True).reset_index(drop=True)
+
+
+def _render_breadth_bar(breadth: pd.DataFrame) -> None:
+    """
+    Horizontal bar chart: all sectors, sorted by breadth ascending
+    (highest at top), coloured with the active heatmap palette.
+    """
+    _palette_label = st.session_state.get("color_palette", "RdYlGn (default)")
+    _color_scale   = _PALETTE_MAP.get(_palette_label, "RdYlGn")
+
+    bar_colors = [
+        pc.sample_colorscale(_color_scale, [b / 100])[0]
+        for b in breadth["breadth_pct"]
+    ]
+    hover_texts = [
+        f"<b>{row['group_name']}</b><br>"
+        f"Breadth: {row['breadth_pct']:.0f}%<br>"
+        f"{int(row['n_up'])}/{int(row['n_total'])} stocks up"
+        for _, row in breadth.iterrows()
+    ]
+
+    fig = go.Figure(go.Bar(
+        x=breadth["breadth_pct"],
+        y=breadth["group_name"],
+        orientation="h",
+        marker_color=bar_colors,
+        text=[f"{b:.0f}%" for b in breadth["breadth_pct"]],
+        textposition="outside",
+        hovertext=hover_texts,
+        hoverinfo="text",
+    ))
+    fig.add_vline(
+        x=50,
+        line_color="rgba(255,255,255,0.3)",
+        line_width=1,
+        line_dash="dot",
+        annotation_text="50%",
+        annotation_position="top",
+        annotation_font_color="rgba(255,255,255,0.4)",
+    )
+    fig.update_layout(
+        height=max(220, len(breadth) * 28),
+        margin=dict(t=10, l=10, r=60, b=30),
+        xaxis=dict(
+            range=[0, 115],
+            title="% of stocks up",
+            gridcolor="rgba(255,255,255,0.1)",
+            zeroline=False,
+        ),
+        yaxis=dict(tickfont=dict(size=11)),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font_color="white",
+    )
+
+    st.subheader("Sector Breadth")
+    st.caption(
+        f"% of stocks with a positive return · {len(breadth)} sectors · "
+        "dotted line = 50%"
+    )
+    st.plotly_chart(fig, use_container_width=True, theme=None)
 
 
 # ---------------------------------------------------------------------------
@@ -66,8 +157,8 @@ def render_sector_synopsis(
 
     median_ret  = sdf["return_pct"].median()
     avg_ret     = sdf["return_pct"].mean()
-    gainers     = (sdf["return_pct"] > 0).sum()
-    losers      = (sdf["return_pct"] < 0).sum()
+    gainers     = int((sdf["return_pct"] > 0).sum())
+    breadth_pct = gainers / len(sdf) * 100
     total_dvol  = sdf["dollar_volume"].sum()
     best        = sdf.iloc[0]
     worst       = sdf.iloc[-1]
@@ -76,11 +167,11 @@ def render_sector_synopsis(
     # range_label shown once as caption; removed from individual metric headings
     # to prevent truncation. Column widths weighted by content needs.
     st.caption(f"Period: {range_label}")
-    k = st.columns([0.7, 1.6, 1.6, 1.4, 1.7])
+    k = st.columns([0.7, 1.6, 1.6, 1.8, 1.7])
     k[0].metric("Stocks", len(sdf))
     k[1].metric("Median return", f"{median_ret:+.2f}%")
     k[2].metric("Avg return",    f"{avg_ret:+.2f}%")
-    k[3].metric("Gainers / Losers", f"{gainers} / {losers}")
+    k[3].metric("Breadth",       f"{breadth_pct:.0f}% ({gainers}/{len(sdf)} up)")
     k[4].metric("Total dollar volume", _fmt_dollar(total_dvol))
 
     st.markdown("---")
@@ -91,6 +182,7 @@ def render_sector_synopsis(
         f"**{sector}** had **{len(sdf)} stocks** in the selected period. "
         f"The sector {direction} with an average return of **{avg_ret:+.2f}%** "
         f"(median: **{median_ret:+.2f}%**). "
+        f"Breadth was **{breadth_pct:.0f}%** ({gainers}/{len(sdf)} stocks up). "
         f"Best performer: **{best['symbol']}** ({best['return_pct']:+.2f}%). "
         f"Worst performer: **{worst['symbol']}** ({worst['return_pct']:+.2f}%)."
     )
@@ -210,6 +302,11 @@ def render_sector_synopsis_tab(
     if not sectors:
         st.warning("No sector data available for this universe.")
         return
+
+    # Cross-sector overview — all sectors sorted by breadth
+    _render_breadth_bar(_compute_sector_breadth(df))
+
+    st.divider()
 
     selected_sector = st.selectbox("Select sector", sectors, key="synopsis_sector")
     render_sector_synopsis(df, selected_sector, range_label, db_url, date_from, date_to)

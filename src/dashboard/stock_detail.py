@@ -9,7 +9,6 @@ render_stock_detail(df, db_url, date_from, date_to)
 from __future__ import annotations
 
 import datetime as dt
-import io
 
 import pandas as pd
 import streamlit as st
@@ -28,17 +27,6 @@ _INDEX_BADGES = [
     ("in_dow30",    "Dow 30",     "#00695C"),
 ]
 
-
-def _exceeds_three_months(d_from: dt.date, d_to: dt.date) -> bool:
-    """Return True if d_to is strictly more than 3 calendar months after d_from."""
-    target_month = d_from.month + 3
-    target_year  = d_from.year + (target_month - 1) // 12
-    target_month = (target_month - 1) % 12 + 1
-    try:
-        cutoff = d_from.replace(year=target_year, month=target_month)
-    except ValueError:
-        cutoff = dt.date(target_year, target_month + 1, 1) - dt.timedelta(days=1)
-    return d_to > cutoff
 
 
 @st.fragment
@@ -116,32 +104,6 @@ def render_stock_detail(
     if df_ohlcv.empty:
         st.warning("No price data found for this symbol in the selected date range.")
     else:
-        # Download button — right-aligned above the chart
-        _spacer, _dl_col = st.columns([5, 1])
-        with _dl_col:
-            _over_limit = _exceeds_three_months(date_from, date_to)
-            _buf = io.StringIO()
-            if not _over_limit:
-                df_ohlcv.to_csv(_buf, index=False)
-            st.download_button(
-                label="⬇ Export CSV",
-                data=_buf.getvalue().encode(),
-                file_name=(
-                    f"{selected_symbol}"
-                    f"_{date_from.isoformat()}"
-                    f"_{date_to.isoformat()}"
-                    f"_ohlcv.csv"
-                ),
-                mime="text/csv",
-                use_container_width=True,
-                disabled=_over_limit,
-                help=(
-                    "Export limited to ranges of 3 months or less — narrow the date range to enable."
-                    if _over_limit
-                    else "Download OHLCV bars for the selected date range"
-                ),
-            )
-
         _n = len(df_ohlcv)
         _needs = []
         if _n < 50 and "SMA 50" in active_indicators:
