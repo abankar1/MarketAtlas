@@ -138,11 +138,12 @@ source .venv/bin/activate
 streamlit run src/dashboard/app.py
 ```
 
-Three tabs, all driven by the same sidebar filters:
+Four tabs, all driven by the same sidebar filters:
 
-- **Heatmap** — treemap tiles sized by dollar volume, colored by return % (green gain / red loss); KPIs; sortable raw data table
+- **Heatmap** — treemap tiles sized by dollar volume, colored by return % (green gain / red loss); KPIs; sortable raw data table; CSV export (≤ 3 months)
 - **Sector Synopsis** — ranked bar chart for one sector with inline per-stock candlestick on click
-- **Stock Detail** — full per-stock candlestick with toggleable technical overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI, MACD, ATR, OBV)
+- **Stock Detail** — full per-stock candlestick with toggleable technical overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI, MACD, ATR, OBV); index membership badges; OHLCV CSV export (≤ 3 months)
+- **Index Overlap** — cross-membership breakdown showing how symbols are distributed across S&P 500, NASDAQ-100, and Dow 30 (exclusive / shared / all three); expandable per-bucket symbol tables
 
 Sidebar controls:
 - Index selector: S&P 500 | NASDAQ-100 | Dow 30 | All
