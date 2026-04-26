@@ -134,6 +134,7 @@ def render_ranked_table(
         f"{len(tdf)} symbols · sortable by any column · "
         "color scale matches the treemap"
     )
+    st.code(" ".join(tdf["Symbol"].tolist()), language=None)
     st.dataframe(styled, use_container_width=True)
 
 

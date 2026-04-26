@@ -114,6 +114,7 @@ def render_index_overlap_tab(db_url: str) -> None:
         if b["count"] == 0:
             continue
         with st.expander(f"{b['label']} — {b['count']} symbols"):
+            st.code(" ".join(b["df"]["symbol"].tolist()), language=None)
             display = b["df"].copy()
             display.index = display.index + 1
             display.columns = ["Symbol", "Name", "Sector"]
