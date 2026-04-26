@@ -256,6 +256,7 @@ def render_heatmap_tab(
     index_key: str = "all",
     date_from: dt.date | None = None,
     date_to: dt.date | None = None,
+    size_by: str = "dollar_volume",
 ) -> None:
     """Render the full Heatmap tab: sector filter, color controls, movers strip, view toggle, treemap or ranked table."""
     # ------------------------------------------------------------------
@@ -361,12 +362,23 @@ def render_heatmap_tab(
     # --- end CSV export ---
 
     if view_toggle == "Treemap":
+        # Prepare values column based on size_by mode
+        _values_col = "dollar_volume"
+        _plot_df = df
+        if size_by == "equal_weight":
+            _plot_df = df.assign(_size=1.0)
+            _values_col = "_size"
+        elif size_by == "magnitude":
+            _plot_df = df.assign(_size=df["return_pct"].abs().clip(lower=0.01))
+            _values_col = "_size"
+
         _render_movers_strip(df, color_range, color_scale, center_zero)
         fig = build_fig(
-            df,
+            _plot_df,
             color_range=color_range,
             color_scale=color_scale,
             center_zero=center_zero,
+            values_col=_values_col,
         )
         st.plotly_chart(fig, use_container_width=True, theme=None)
 

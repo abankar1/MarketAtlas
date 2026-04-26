@@ -32,10 +32,13 @@ def build_fig(
     color_range: tuple[float, float],
     color_scale: str = "RdYlGn",
     center_zero: bool = True,
+    values_col: str = "dollar_volume",
 ) -> px.treemap:
     """
-    Build the treemap sized by dollar volume, colored by return %.
+    Build the treemap colored by return %.
 
+    values_col     Column used to size tiles ('dollar_volume', '_size' for
+                   equal-weight or magnitude modes).
     color_scale    Any Plotly named colorscale ('RdYlGn', 'RdBu', 'Viridis', …)
     center_zero    True → diverging midpoint pinned at 0%.
                    False → midpoint at period median return.
@@ -52,7 +55,7 @@ def build_fig(
     fig = px.treemap(
         df,
         path=["group_name", "symbol"],
-        values="dollar_volume",
+        values=values_col,
         color="return_pct",
         hover_data={
             "start_close": ":.2f",

@@ -71,6 +71,13 @@ INDEX_OPTIONS: dict[str, str] = {
     "All":       "all",
 }
 
+# label → internal key passed to render_heatmap_tab
+_SIZE_BY_OPTIONS: dict[str, str] = {
+    "Dollar volume": "dollar_volume",
+    "Equal weight":  "equal_weight",
+    "Magnitude":     "magnitude",
+}
+
 # label → (days_back | None = YTD, display label)
 _DATE_PRESETS: dict[str, tuple[int | None, str]] = {
     "3M":  (90,   "Past 3 months"),
@@ -238,6 +245,20 @@ def main() -> None:
         range_label = f"{days_span}d ({date_from.isoformat()} → {date_to.isoformat()})"
 
     # -----------------------------------------------------------------------
+    # Sidebar — heatmap display
+    # -----------------------------------------------------------------------
+    st.sidebar.subheader("Heatmap")
+    size_by = _SIZE_BY_OPTIONS[st.sidebar.selectbox(
+        "Size tiles by",
+        list(_SIZE_BY_OPTIONS.keys()),
+        key="treemap_size_by",
+        help=(
+            "Dollar volume — tile area ∝ end price × shares traded.\n\n"
+            "Equal weight — every tile the same size; colour is the only signal.\n\n"
+            "Magnitude — tile area ∝ |return %|; highlights movers regardless of liquidity."
+        ),
+    )]
+
     # -----------------------------------------------------------------------
     # Sidebar — cache stats + clear
     # -----------------------------------------------------------------------
@@ -299,7 +320,7 @@ def main() -> None:
     _active_tab = st.session_state["active_tab"]
 
     if _active_tab == "Heatmap":
-        render_heatmap_tab(df, index_key, date_from, date_to)
+        render_heatmap_tab(df, index_key, date_from, date_to, size_by=size_by)
 
     elif _active_tab == "Sector Synopsis":
         render_sector_synopsis_tab(df, range_label, db_url, date_from, date_to)
