@@ -76,6 +76,39 @@ INDEX_OPTIONS = {
     "All": "all",
 }
 
+# Preset definitions: label -> (days_back_from_today | None = YTD, display label)
+_DATE_PRESETS: dict[str, tuple[int | None, str]] = {
+    "3M":  (90,   "Past 3 months"),
+    "6M":  (182,  "Past 6 months"),
+    "1Y":  (365,  "Past 1 year"),
+    "2Y":  (730,  "Past 2 years"),
+    "YTD": (None, "YTD"),
+}
+
+
+def _preset_dates(key: str) -> tuple[dt.date, dt.date]:
+    """Compute (date_from, date_to) for a preset key, anchored to today."""
+    today = dt.date.today()
+    days_back, _ = _DATE_PRESETS[key]
+    d_from = (
+        dt.date(today.year, 1, 1)
+        if days_back is None
+        else today - dt.timedelta(days=days_back)
+    )
+    return d_from, today
+
+
+def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None:
+    """
+    on_click callback for preset buttons.
+    Runs before the script reruns, so active_preset is already set when
+    the buttons are rendered — the highlight appears on the first click.
+    """
+    d_from, d_to = _preset_dates(label)
+    st.session_state["active_preset"] = label
+    st.session_state["date_from"] = max(min_day, min(d_from, end_max_day))
+    st.session_state["date_to"] = max(min_day, min(d_to, end_max_day))
+
 
 def build_universe_sql(index_key: str) -> str:
     # Normalize the universe into: symbol, group_name, index_name.
@@ -715,62 +748,36 @@ def main() -> None:
     # End date should be capped at max_day (e.g., 2026-01-30) per UI requirement.
     end_max_day = max(min_day, max_day)
 
+    # ---------- Quick-range preset buttons ----------
+    # Default to "3M" on first load
+    if "active_preset" not in st.session_state:
+        st.session_state["active_preset"] = "3M"
+
+    # Render buttons with on_click callback so active_preset is updated
+    # before the rerun — button highlights on the very first click.
     st.sidebar.subheader("Quick range")
-    preset = st.sidebar.selectbox(
-        "Select range",
-        [
-            "Custom",
-            "Past 3 months",
-            "Past 6 months",
-            "Past 1 year",
-            "Past 2 years",
-            "YTD",
-        ],
-        index=1,
-        key="range_preset",
-        help="Pick a preset to quickly set start/end dates. Choose Custom to set dates manually.",
-    )
+    btn_cols = st.sidebar.columns(len(_DATE_PRESETS))
+    for col, label in zip(btn_cols, _DATE_PRESETS):
+        col.button(
+            label,
+            key=f"preset_btn_{label}",
+            type="primary" if st.session_state["active_preset"] == label else "secondary",
+            use_container_width=True,
+            on_click=_on_preset_click,
+            kwargs={"label": label, "min_day": min_day, "end_max_day": end_max_day},
+        )
 
-    # Apply preset BEFORE rendering the date inputs (so Streamlit doesn't complain about out-of-range values).
-    if preset != "Custom":
-        date_to_preset = end_max_day
-
-        if preset == "Past 3 months":
-            date_from_preset = date_to_preset - dt.timedelta(days=90)
-        elif preset == "Past 6 months":
-            date_from_preset = date_to_preset - dt.timedelta(days=182)
-        elif preset == "Past 1 year":
-            date_from_preset = date_to_preset - dt.timedelta(days=365)
-        elif preset == "Past 2 years":
-            date_from_preset = date_to_preset - dt.timedelta(days=730)
-        elif preset == "YTD":
-            date_from_preset = dt.date(date_to_preset.year, 1, 1)
-        else:
-            date_from_preset = date_to_preset - dt.timedelta(days=90)
-
-        # Clamp to available data bounds.
-        st.session_state["date_to"] = max(min_day, min(date_to_preset, end_max_day))
-        st.session_state["date_from"] = max(min_day, min(date_from_preset, max_day))
-
-    # Defaults: last 3 months ending at fixed 01/30/2026 (clamped to available bounds).
-    fixed_default_to = dt.date(2026, 1, 30)
-    default_to = min(end_max_day, max(min_day, fixed_default_to))
-    default_from = max(min_day, default_to - dt.timedelta(days=90))
-
-    # Seed session_state with valid defaults if missing/invalid.
+    # Seed session_state on very first load (no button clicked yet)
     if not isinstance(st.session_state.get("date_from"), dt.date):
-        st.session_state["date_from"] = default_from
-    if not isinstance(st.session_state.get("date_to"), dt.date):
-        st.session_state["date_to"] = default_to
+        d_from, d_to = _preset_dates(st.session_state["active_preset"])
+        st.session_state["date_from"] = max(min_day, min(d_from, end_max_day))
+        st.session_state["date_to"] = max(min_day, min(d_to, end_max_day))
 
-    # Clamp any previously selected dates BEFORE rendering widgets.
-    st.session_state["date_from"] = max(
-        min_day, min(st.session_state["date_from"], max_day)
-    )
-    st.session_state["date_to"] = max(
-        min_day, min(st.session_state["date_to"], end_max_day)
-    )
+    # Clamp stored dates to available bounds before rendering pickers
+    st.session_state["date_from"] = max(min_day, min(st.session_state["date_from"], end_max_day))
+    st.session_state["date_to"] = max(min_day, min(st.session_state["date_to"], end_max_day))
 
+    st.sidebar.subheader("Date range")
     date_from = st.sidebar.date_input(
         "Start date",
         min_value=min_day,
@@ -787,37 +794,20 @@ def main() -> None:
         help=f"Available data: {min_day} to {end_max_day}",
     )
 
-    # If user manually edits dates, reflect that by switching preset to Custom.
-    if st.session_state.get("range_preset") != "Custom":
-        # Compare against what the preset would imply (using end_max_day).
-        # If the user changes either bound, treat as Custom.
-        expected_to = end_max_day
-        preset = st.session_state.get("range_preset")
-
-        if preset == "Past 3 months":
-            expected_from = expected_to - dt.timedelta(days=90)
-        elif preset == "Past 6 months":
-            expected_from = expected_to - dt.timedelta(days=182)
-        elif preset == "Past 1 year":
-            expected_from = expected_to - dt.timedelta(days=365)
-        elif preset == "Past 2 years":
-            expected_from = expected_to - dt.timedelta(days=730)
-        elif preset == "YTD":
-            expected_from = dt.date(expected_to.year, 1, 1)
-        else:
-            expected_from = expected_to - dt.timedelta(days=90)
-
-        expected_from = max(min_day, min(expected_from, max_day))
-        expected_to = max(min_day, min(expected_to, end_max_day))
-
-        if (date_from, date_to) != (expected_from, expected_to):
-            st.session_state["range_preset"] = "Custom"
+    # Clear highlight when the user manually edits either date picker
+    _active = st.session_state.get("active_preset")
+    if _active:
+        _exp_from, _exp_to = _preset_dates(_active)
+        _exp_from = max(min_day, min(_exp_from, end_max_day))
+        _exp_to = max(min_day, min(_exp_to, end_max_day))
+        if (date_from, date_to) != (_exp_from, _exp_to):
+            st.session_state["active_preset"] = None
 
     if date_from > date_to:
         st.error("Start date must be <= end date.")
         st.stop()
 
-    # Clamp to available data bounds for querying.
+    # Clamp to available data bounds for querying
     clamped_from = max(min_day, min(date_from, max_day))
     clamped_to = max(min_day, min(date_to, end_max_day))
 
@@ -827,13 +817,13 @@ def main() -> None:
         st.session_state["date_from"] = date_from
         st.session_state["date_to"] = date_to
 
-    # Build a label for KPIs based on the selected range/preset
-    preset_label = st.session_state.get("range_preset", "Custom")
-    if preset_label and preset_label != "Custom":
-        range_label = preset_label
+    # Range label used in KPI headings
+    _active = st.session_state.get("active_preset")
+    if _active and _active in _DATE_PRESETS:
+        range_label = _DATE_PRESETS[_active][1]
     else:
-        days = (date_to - date_from).days + 1
-        range_label = f"{days}d ({date_from.isoformat()} → {date_to.isoformat()})"
+        days_span = (date_to - date_from).days + 1
+        range_label = f"{days_span}d ({date_from.isoformat()} → {date_to.isoformat()})"
 
     # Color range control (so the heatmap isn't blown out by outliers)
     st.sidebar.subheader("Color scaling")
