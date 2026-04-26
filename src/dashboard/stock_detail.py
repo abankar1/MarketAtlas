@@ -68,7 +68,7 @@ def render_stock_detail(
 
     active_indicators = st.multiselect(
         "Overlays",
-        ["SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI"],
+        ["SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI", "MACD", "ATR", "OBV"],
         default=["SMA 20", "SMA 50"],
         key="detail_indicators",
     )
@@ -79,10 +79,22 @@ def render_stock_detail(
     if df_ohlcv.empty:
         st.warning("No price data found for this symbol in the selected date range.")
     else:
-        if len(df_ohlcv) < 21:
+        _n = len(df_ohlcv)
+        _needs = []
+        if _n < 50 and "SMA 50" in active_indicators:
+            _needs.append("SMA 50: 50 bars")
+        if _n < 21 and "Bollinger Bands" in active_indicators:
+            _needs.append("Bollinger Bands: 21 bars")
+        if _n < 15 and "RSI" in active_indicators:
+            _needs.append("RSI: 15 bars")
+        if _n < 35 and "MACD" in active_indicators:
+            _needs.append("MACD: 35 bars")
+        if _n < 15 and "ATR" in active_indicators:
+            _needs.append("ATR: 15 bars")
+        if _needs:
             st.warning(
-                f"Only {len(df_ohlcv)} bars in range — some indicators need more data "
-                "(Bollinger Bands: 21, SMA 50: 50). Extend the date range for complete signals."
+                f"Only {_n} bars in range — some indicators need more data: "
+                + ", ".join(_needs) + ". Extend the date range for complete signals."
             )
         st.plotly_chart(
             build_detail_fig(df_ohlcv, selected_symbol, active_indicators),

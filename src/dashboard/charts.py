@@ -13,8 +13,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from src.dashboard.indicators import (
+    compute_atr,
     compute_bollinger_bands,
     compute_ema,
+    compute_macd,
+    compute_obv,
     compute_rsi,
     compute_sma,
 )
@@ -72,24 +75,65 @@ def build_detail_fig(
     df: pd.DataFrame, symbol: str, active: list[str]
 ) -> go.Figure:
     """
-    Build a 3-panel figure for a single stock:
-      Row 1 — Candlestick + optional indicator overlays
-      Row 2 — Volume bars (green/red)
-      Row 3 — RSI (14)
+    Build a multi-panel figure for a single stock.
+
+    Fixed panels
+    ------------
+    Row 1  Candlestick + price overlays (SMA 20/50, EMA 20, Bollinger Bands)
+    Row 2  Volume bars (green/red)
+
+    Optional sub-panels (one row each, rendered in this order if selected)
+    -----------------------------------------------------------------------
+    RSI    14-period Relative Strength Index (overbought 70 / oversold 30)
+    MACD   12/26/9 — line + signal + histogram bars
+    ATR    14-period Average True Range (volatility proxy)
+    OBV    On-Balance Volume (volume-weighted trend)
+
+    Row count and heights are computed dynamically from `active`.
     """
+    close  = df["close"]
+    dates  = df["date"]
+
+    # Sub-panels rendered in a fixed order regardless of multiselect order
+    _SUB_PANEL_ORDER = ["RSI", "MACD", "ATR", "OBV"]
+    sub_panels = [p for p in _SUB_PANEL_ORDER if p in active]
+    n_sub      = len(sub_panels)
+    n_rows     = 2 + n_sub
+
+    # Row heights: price dominates; each additional panel shrinks it slightly
+    if n_sub == 0:
+        row_heights = [0.72, 0.28]
+        fig_height  = 500
+    else:
+        price_h  = max(0.45, 0.60 - 0.03 * n_sub)
+        vol_h    = 0.12 if n_sub >= 3 else 0.15
+        panel_h  = round((1.0 - price_h - vol_h) / n_sub, 4)
+        row_heights = [price_h, vol_h] + [panel_h] * n_sub
+        fig_height  = 580 + 160 * n_sub
+
+    _panel_titles = {
+        "RSI":  "RSI (14)",
+        "MACD": "MACD (12/26/9)",
+        "ATR":  "ATR (14)",
+        "OBV":  "OBV",
+    }
+    subplot_titles = ["", "Volume"] + [_panel_titles[p] for p in sub_panels]
+
+    # Map indicator name → row number (1-based)
+    panel_row = {p: 3 + i for i, p in enumerate(sub_panels)}
+
     fig = make_subplots(
-        rows=3,
+        rows=n_rows,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.04,
-        row_heights=[0.60, 0.20, 0.20],
-        subplot_titles=("", "Volume", "RSI (14)"),
+        row_heights=row_heights,
+        subplot_titles=subplot_titles,
     )
 
-    close = df["close"]
-    dates = df["date"]
-
+    # ------------------------------------------------------------------
     # Row 1 — Candlestick
+    # ------------------------------------------------------------------
     fig.add_trace(
         go.Candlestick(
             x=dates,
@@ -141,7 +185,9 @@ def build_detail_fig(
             row=1, col=1,
         )
 
-    # Row 2 — Volume bars coloured by up/down candle
+    # ------------------------------------------------------------------
+    # Row 2 — Volume bars (coloured by candle direction)
+    # ------------------------------------------------------------------
     bar_colors = np.where(df["close"].values >= df["open"].values, "#26a69a", "#ef5350")
     fig.add_trace(
         go.Bar(x=dates, y=df["volume"], name="Volume",
@@ -149,26 +195,76 @@ def build_detail_fig(
         row=2, col=1,
     )
 
-    # Row 3 — RSI
+    # ------------------------------------------------------------------
+    # Optional sub-panels
+    # ------------------------------------------------------------------
     if "RSI" in active:
+        r = panel_row["RSI"]
         rsi = compute_rsi(close)
         fig.add_trace(
             go.Scatter(x=dates, y=rsi, name="RSI 14",
                        line=dict(color="#FF6F00", width=1.5), showlegend=False),
-            row=3, col=1,
+            row=r, col=1,
         )
-        fig.add_hline(y=70, line_dash="dot", line_color="red", row=3, col=1)
-        fig.add_hline(y=30, line_dash="dot", line_color="green", row=3, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="red",   row=r, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="green", row=r, col=1)
+        fig.update_yaxes(range=[0, 100], row=r, col=1)
 
+    if "MACD" in active:
+        r    = panel_row["MACD"]
+        macd = compute_macd(close)
+        # Histogram bars: green above zero, red below
+        hist_colors = np.where(macd["histogram"].values >= 0, "#26a69a", "#ef5350")
+        fig.add_trace(
+            go.Bar(x=dates, y=macd["histogram"], name="MACD Hist",
+                   marker_color=hist_colors, opacity=0.6, showlegend=False),
+            row=r, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=dates, y=macd["macd"], name="MACD",
+                       line=dict(color="#1976D2", width=1.4), showlegend=False),
+            row=r, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=dates, y=macd["signal"], name="Signal",
+                       line=dict(color="#FF6F00", width=1.2, dash="dot"), showlegend=False),
+            row=r, col=1,
+        )
+        fig.add_hline(y=0, line_color="rgba(255,255,255,0.2)", line_width=1,
+                      row=r, col=1)
+
+    if "ATR" in active:
+        r   = panel_row["ATR"]
+        atr = compute_atr(df["high"], df["low"], close)
+        fig.add_trace(
+            go.Scatter(x=dates, y=atr, name="ATR 14",
+                       line=dict(color="#AB47BC", width=1.4), showlegend=False,
+                       fill="tozeroy", fillcolor="rgba(171,71,188,0.08)"),
+            row=r, col=1,
+        )
+
+    if "OBV" in active:
+        r   = panel_row["OBV"]
+        obv = compute_obv(close, df["volume"])
+        fig.add_trace(
+            go.Scatter(x=dates, y=obv, name="OBV",
+                       line=dict(color="#26C6DA", width=1.4), showlegend=False),
+            row=r, col=1,
+        )
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
     fig.update_layout(
-        height=800,
+        height=fig_height,
         margin=dict(t=30, l=60, r=20, b=20),
         xaxis_rangeslider_visible=False,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
     )
-    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Price",  row=1, col=1)
     fig.update_yaxes(title_text="Volume", row=2, col=1)
-    fig.update_yaxes(title_text="RSI", row=3, col=1, range=[0, 100])
+    for p in sub_panels:
+        fig.update_yaxes(title_text=_panel_titles[p], row=panel_row[p], col=1)
 
     return fig
