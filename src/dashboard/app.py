@@ -71,6 +71,13 @@ INDEX_OPTIONS: dict[str, str] = {
     "All":       "all",
 }
 
+# label → Plotly color scale name
+_PALETTE_OPTIONS: dict[str, str] = {
+    "RdYlGn (default)":       "RdYlGn",
+    "RdBu (colorblind-safe)": "RdBu",
+    "Viridis (sequential)":   "Viridis",
+}
+
 # label → (days_back | None = YTD, display label)
 _DATE_PRESETS: dict[str, tuple[int | None, str]] = {
     "3M":  (90,   "Past 3 months"),
@@ -243,6 +250,23 @@ def main() -> None:
     clip        = st.sidebar.slider("Clip return % to ±X", min_value=1, max_value=50, value=10)
     color_range = (-float(clip), float(clip))
 
+    color_scale = _PALETTE_OPTIONS[st.sidebar.selectbox(
+        "Color palette",
+        list(_PALETTE_OPTIONS.keys()),
+        key="color_palette",
+    )]
+    center_zero = st.sidebar.toggle(
+        "Center on 0%",
+        value=True,
+        key="center_zero",
+        help=(
+            "ON: neutral colour sits at 0% return — green = gain, red = loss.\n\n"
+            "OFF: neutral colour sits at the period's median return — "
+            "useful on broadly bullish or bearish days so relative "
+            "out/under-performers are visible."
+        ),
+    )
+
     # -----------------------------------------------------------------------
     # Sidebar — cache stats + clear
     # -----------------------------------------------------------------------
@@ -304,7 +328,10 @@ def main() -> None:
     _active_tab = st.session_state["active_tab"]
 
     if _active_tab == "Heatmap":
-        render_heatmap_tab(df, color_range, range_label, index_key, date_from, date_to)
+        render_heatmap_tab(
+            df, color_range, range_label, index_key, date_from, date_to,
+            color_scale=color_scale, center_zero=center_zero,
+        )
 
     elif _active_tab == "Sector Synopsis":
         render_sector_synopsis_tab(df, range_label, db_url, date_from, date_to)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import re
 
 import pandas as pd
 import plotly.colors as pc
@@ -22,13 +23,43 @@ from src.dashboard.charts import build_fig
 # Ranked table
 # ---------------------------------------------------------------------------
 
-def render_ranked_table(df: pd.DataFrame, color_range: tuple[float, float]) -> None:
+def _cell_t(val: float, vmin: float, vmax: float, midpoint: float) -> float:
+    """
+    Map val → [0, 1] with `midpoint` at 0.5 for diverging scales.
+    Below midpoint: linear [0 → 0.5]; above: linear [0.5 → 1].
+    """
+    if val <= midpoint:
+        span = midpoint - vmin
+        return max(0.0, 0.5 * (val - vmin) / span) if span else 0.0
+    else:
+        span = vmax - midpoint
+        return min(1.0, 0.5 + 0.5 * (val - midpoint) / span) if span else 1.0
+
+
+def _contrast(rgb_str: str) -> str:
+    """Return 'black' or 'white' for readable text on the given RGB background."""
+    nums = [int(x) for x in re.findall(r"\d+", rgb_str)]
+    if len(nums) >= 3:
+        lum = (0.299 * nums[0] + 0.587 * nums[1] + 0.114 * nums[2]) / 255
+        return "black" if lum > 0.45 else "white"
+    return "black"
+
+
+_SEQUENTIAL_SCALES = {"Viridis", "Plasma", "Inferno", "Magma", "Cividis"}
+
+
+def render_ranked_table(
+    df: pd.DataFrame,
+    color_range: tuple[float, float],
+    color_scale: str = "RdYlGn",
+    center_zero: bool = True,
+) -> None:
     """
     Sorted table of all symbols: rank, symbol, name, sector, return %,
     percentile, dollar volume, volume, start/end close.
 
-    Return % cells are background-colored with the same RdYlGn palette and
-    clip range as the treemap (no matplotlib required — uses Plotly colorscale).
+    Return % cells are background-colored with the same palette and
+    midpoint settings as the treemap.
     Percentile column shows a CSS bar from red (0) to green (100).
     """
     tdf = df[[
@@ -54,20 +85,25 @@ def render_ranked_table(df: pd.DataFrame, color_range: tuple[float, float]) -> N
     })
 
     vmin, vmax = color_range
+    is_sequential = color_scale in _SEQUENTIAL_SCALES
+    midpoint = 0.0 if center_zero else float(df["return_pct"].median())
 
     def _return_cell_style(val: float) -> str:
-        span = vmax - vmin
-        t = max(0.0, min(1.0, (val - vmin) / span)) if span else 0.5
-        rgb = pc.sample_colorscale("RdYlGn", [t])[0]
-        return f"background-color: {rgb}; color: black"
+        if is_sequential:
+            span = vmax - vmin
+            t = max(0.0, min(1.0, (val - vmin) / span)) if span else 0.5
+        else:
+            t = _cell_t(val, vmin, vmax, midpoint)
+        rgb = pc.sample_colorscale(color_scale, [t])[0]
+        return f"background-color: {rgb}; color: {_contrast(rgb)}"
 
     styled = (
         tdf.style
         .map(_return_cell_style, subset=["Return %"])
         .bar(subset=["Percentile"], color=["#ef5350", "#26a69a"], vmin=0, vmax=100)
         .format({
-            "Return %":     "{:+.2f}%",
-            "Percentile":   "{:.0f}",
+            "Return %":      "{:+.2f}%",
+            "Percentile":    "{:.0f}",
             "Dollar Volume": "${:,.0f}",
             "Volume":        "{:,.0f}",
             "Start Close":   "${:.2f}",
@@ -77,7 +113,7 @@ def render_ranked_table(df: pd.DataFrame, color_range: tuple[float, float]) -> N
 
     st.caption(
         f"{len(tdf)} symbols · sortable by any column · "
-        "color scale clipped to the same ±range as the treemap"
+        "color scale matches the treemap"
     )
     st.dataframe(styled, use_container_width=True)
 
@@ -139,6 +175,8 @@ def render_heatmap_tab(
     index_key: str = "all",
     date_from: dt.date | None = None,
     date_to: dt.date | None = None,
+    color_scale: str = "RdYlGn",
+    center_zero: bool = True,
 ) -> None:
     """Render the full Heatmap tab: KPI row, view toggle, treemap or ranked table."""
     # KPI row
@@ -186,7 +224,8 @@ def render_heatmap_tab(
         )
 
     if view_toggle == "Treemap":
-        fig = build_fig(df, color_range=color_range)
+        fig = build_fig(df, color_range=color_range,
+                        color_scale=color_scale, center_zero=center_zero)
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
         with st.expander("Show raw data"):
@@ -195,4 +234,4 @@ def render_heatmap_tab(
                 use_container_width=True,
             )
     else:
-        render_ranked_table(df, color_range)
+        render_ranked_table(df, color_range, color_scale=color_scale, center_zero=center_zero)

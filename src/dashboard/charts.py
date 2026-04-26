@@ -27,8 +27,28 @@ from src.dashboard.indicators import (
 # Heatmap treemap
 # ---------------------------------------------------------------------------
 
-def build_fig(df: pd.DataFrame, color_range: tuple[float, float]) -> px.treemap:
-    """Build the RdYlGn treemap sized by dollar volume, colored by return %."""
+def build_fig(
+    df: pd.DataFrame,
+    color_range: tuple[float, float],
+    color_scale: str = "RdYlGn",
+    center_zero: bool = True,
+) -> px.treemap:
+    """
+    Build the treemap sized by dollar volume, colored by return %.
+
+    color_scale    Any Plotly named colorscale ('RdYlGn', 'RdBu', 'Viridis', …)
+    center_zero    True → diverging midpoint pinned at 0%.
+                   False → midpoint at period median return.
+                   Ignored for sequential scales (Viridis).
+    """
+    # Diverging scales benefit from an explicit midpoint; sequential ones don't.
+    _SEQUENTIAL = {"Viridis", "Plasma", "Inferno", "Magma", "Cividis"}
+    midpoint_kwargs: dict = {}
+    if color_scale not in _SEQUENTIAL:
+        midpoint_kwargs["color_continuous_midpoint"] = (
+            0.0 if center_zero else float(df["return_pct"].median())
+        )
+
     fig = px.treemap(
         df,
         path=["group_name", "symbol"],
@@ -40,8 +60,9 @@ def build_fig(df: pd.DataFrame, color_range: tuple[float, float]) -> px.treemap:
             "dollar_volume": ":,.0f",
             "index_name": True,
         },
-        color_continuous_scale="RdYlGn",
+        color_continuous_scale=color_scale,
         range_color=color_range,
+        **midpoint_kwargs,
     )
 
     fig.update_traces(
