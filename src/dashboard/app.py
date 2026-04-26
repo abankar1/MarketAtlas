@@ -707,6 +707,89 @@ def render_ranked_table(df: pd.DataFrame, color_range: tuple[float, float]) -> N
     st.dataframe(styled, use_container_width=True)
 
 
+@st.fragment
+def render_stock_detail(
+    df: pd.DataFrame,
+    db_url: str,
+    date_from: dt.date,
+    date_to: dt.date,
+) -> None:
+    """
+    Stock Detail panel — selectbox + candlestick chart with indicator overlays.
+
+    Decorated @st.fragment so that selecting a symbol only reruns this panel,
+    not the full page. This prevents the active tab from resetting to Heatmap
+    when the user interacts with the selectbox (including the backspace+Enter edge case).
+
+    We store only the raw ticker symbol ("AAPL") in session_state, not the full label
+    string ("AAPL — Apple Inc.  (..., +12.3%)").  The label is rebuilt from the current
+    df on every render, so it stays correct when the date range changes and return %
+    values shift.  We pass index= explicitly (no key=) to avoid Streamlit's validation
+    that session_state[key] must literally appear in the options list — that check fires
+    before we can correct the stale value and causes an unrecoverable exception that
+    resets the active tab.
+    """
+    # Build option labels: "AAPL — Apple Inc.  (Information Technology, +12.3%)"
+    symbol_returns = (
+        df[["symbol", "name", "group_name", "return_pct"]]
+        .sort_values("symbol")
+        .reset_index(drop=True)
+    )
+    symbol_options = [
+        f"{row.symbol} — {row.name}  ({row.group_name}, {row.return_pct:+.1f}%)"
+        for row in symbol_returns.itertuples()
+    ]
+    symbol_map = dict(zip(symbol_options, symbol_returns["symbol"]))
+    # Reverse map: ticker → current option label (handles date-range rebuilds)
+    ticker_to_option: dict[str, str] = {sym: opt for opt, sym in symbol_map.items()}
+
+    # Resolve stored ticker → index in the current options list.
+    # Falls back to 0 if the ticker isn't in this universe (e.g. after switching index).
+    _stored_ticker = st.session_state.get("detail_selected_ticker", "")
+    if _stored_ticker and _stored_ticker in ticker_to_option:
+        _default_idx = symbol_options.index(ticker_to_option[_stored_ticker])
+    else:
+        _default_idx = 0
+
+    # No key= — we track selection manually via session_state["detail_selected_ticker"].
+    # Without key=, Streamlit never validates session_state against the options list,
+    # so there is no exception when the date range changes and labels are rebuilt.
+    selected_display = st.selectbox(
+        "Select symbol",
+        symbol_options,
+        index=_default_idx,
+        help="Click and type to search by ticker, company name, or sector.",
+    )
+
+    selected_symbol = symbol_map[selected_display]
+    # Persist just the ticker so it survives label rebuilds on date range changes
+    st.session_state["detail_selected_ticker"] = selected_symbol
+
+    active_indicators = st.multiselect(
+        "Overlays",
+        ["SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI"],
+        default=["SMA 20", "SMA 50"],
+        key="detail_indicators",
+    )
+
+    with st.spinner(f"Loading {selected_symbol}..."):
+        df_ohlcv = get_ohlcv_cached(db_url, selected_symbol, date_from, date_to)
+
+    if df_ohlcv.empty:
+        st.warning("No price data found for this symbol in the selected date range.")
+    else:
+        if len(df_ohlcv) < 21:
+            st.warning(
+                f"Only {len(df_ohlcv)} bars in range — some indicators need more data "
+                "(Bollinger Bands: 21, SMA 50: 50). Extend the date range for complete signals."
+            )
+        st.plotly_chart(
+            build_detail_fig(df_ohlcv, selected_symbol, active_indicators),
+            use_container_width=True,
+            theme=None,
+        )
+
+
 def main() -> None:
     st.set_page_config(page_title="Market Heatmap", layout="wide")
     st.markdown(
@@ -773,35 +856,38 @@ def main() -> None:
         st.session_state["date_from"] = max(min_day, min(d_from, end_max_day))
         st.session_state["date_to"] = max(min_day, min(d_to, end_max_day))
 
-    # Clamp stored dates to available bounds before rendering pickers
-    st.session_state["date_from"] = max(min_day, min(st.session_state["date_from"], end_max_day))
-    st.session_state["date_to"] = max(min_day, min(st.session_state["date_to"], end_max_day))
+    # Clamp stored dates to available bounds — these become the "expected" values
+    # passed to the date inputs via value=.
+    _cur_from = max(min_day, min(st.session_state["date_from"], end_max_day))
+    _cur_to = max(min_day, min(st.session_state["date_to"], end_max_day))
 
+    # Use value= (not key=) so session_state changes from preset on_click callbacks
+    # always win. With key=, Streamlit can "remember" a prior user interaction and
+    # silently ignore session_state updates made by callbacks — causing the end date
+    # to stay stale after clicking a preset button.
     st.sidebar.subheader("Date range")
     date_from = st.sidebar.date_input(
         "Start date",
+        value=_cur_from,
         min_value=min_day,
         max_value=max_day,
-        key="date_from",
         help=f"Available data: {min_day} to {max_day}",
     )
-
     date_to = st.sidebar.date_input(
         "End date",
+        value=_cur_to,
         min_value=min_day,
         max_value=end_max_day,
-        key="date_to",
         help=f"Available data: {min_day} to {end_max_day}",
     )
 
-    # Clear highlight when the user manually edits either date picker
-    _active = st.session_state.get("active_preset")
-    if _active:
-        _exp_from, _exp_to = _preset_dates(_active)
-        _exp_from = max(min_day, min(_exp_from, end_max_day))
-        _exp_to = max(min_day, min(_exp_to, end_max_day))
-        if (date_from, date_to) != (_exp_from, _exp_to):
-            st.session_state["active_preset"] = None
+    # Detect manual changes: if user moved either picker, clear the preset highlight
+    if date_from != _cur_from or date_to != _cur_to:
+        st.session_state["active_preset"] = None
+
+    # Always sync session_state so the next rerun and callbacks read current values
+    st.session_state["date_from"] = date_from
+    st.session_state["date_to"] = date_to
 
     if date_from > date_to:
         st.error("Start date must be <= end date.")
@@ -913,75 +999,8 @@ def main() -> None:
             )
             render_sector_synopsis(df, selected_sector, range_label, db_url, date_from, date_to)
 
-    with tab_detail:  # Stock Detail
-        # Build symbol options with return % for context
-        symbol_returns = (
-            df[["symbol", "group_name", "return_pct"]]
-            .sort_values("symbol")
-            .reset_index(drop=True)
-        )
-        symbol_options = [
-            f"{row.symbol}  ({row.group_name}, {row.return_pct:+.1f}%)"
-            for row in symbol_returns.itertuples()
-        ]
-        symbol_map = dict(zip(symbol_options, symbol_returns["symbol"]))
-
-        search = st.text_input(
-            "Search symbol",
-            placeholder="Type to filter (e.g. AAPL, MSFT, Tech...)",
-            key="symbol_search",
-        )
-
-        if search:
-            query = search.upper()
-            filtered = [s for s in symbol_options if query in s.upper()]
-        else:
-            filtered = symbol_options
-
-        if not filtered:
-            st.warning(f"No symbols match '{search}'.")
-            st.stop()
-
-        # Persist selection across reruns even when the filtered list changes
-        prev = st.session_state.get("detail_symbol_display")
-        if prev in filtered:
-            default_idx = filtered.index(prev)
-        else:
-            default_idx = 0
-
-        selected_display = st.selectbox(
-            "Select symbol",
-            filtered,
-            index=default_idx,
-            key="detail_symbol_display",
-        )
-        selected_symbol = symbol_map[selected_display]
-
-        active_indicators = st.multiselect(
-            "Overlays",
-            ["SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI"],
-            default=["SMA 20", "SMA 50"],
-            key="detail_indicators",
-        )
-
-        with st.spinner(f"Loading {selected_symbol}..."):
-            df_ohlcv = get_ohlcv_cached(
-                db_url, selected_symbol, date_from, date_to
-            )
-
-        if df_ohlcv.empty:
-            st.warning("No price data found for this symbol in the selected date range.")
-        else:
-            if len(df_ohlcv) < 21:
-                st.warning(
-                    f"Only {len(df_ohlcv)} bars in range — some indicators need more data "
-                    "(Bollinger Bands: 21, SMA 50: 50). Extend the date range for complete signals."
-                )
-            st.plotly_chart(
-                build_detail_fig(df_ohlcv, selected_symbol, active_indicators),
-                use_container_width=True,
-                theme=None,
-            )
+    with tab_detail:
+        render_stock_detail(df, db_url, date_from, date_to)
 
 
 if __name__ == "__main__":
