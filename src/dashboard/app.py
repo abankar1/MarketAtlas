@@ -600,6 +600,77 @@ def render_sector_synopsis(
         st.dataframe(display, use_container_width=True, hide_index=True)
 
 
+def render_ranked_table(df: pd.DataFrame, color_range: tuple[float, float]) -> None:
+    """
+    Ranked table view of all symbols in the current universe.
+
+    Reuses fetch_treemap_data output — no extra queries.
+    Columns: rank, symbol, name, sector, return %, percentile rank,
+             dollar volume, volume, start close, end close.
+    Percentile rank = rank / count * 100 (100 = best performer).
+    Return % column is background-colored with the same RdYlGn palette
+    as the treemap, clipped to the same ±X range.
+    """
+    tdf = df[[
+        "symbol", "name", "group_name",
+        "return_pct", "dollar_volume", "end_volume",
+        "start_close", "end_close",
+    ]].copy()
+
+    # Percentile rank across the whole universe (100 = top performer)
+    tdf["percentile_rank"] = (tdf["return_pct"].rank(ascending=True) / len(tdf) * 100)
+
+    # Default sort: best return first; user can re-sort by clicking headers
+    tdf = tdf.sort_values("return_pct", ascending=False).reset_index(drop=True)
+    tdf.index = tdf.index + 1  # 1-based rank shown as the index column
+
+    tdf = tdf.rename(columns={
+        "symbol":         "Symbol",
+        "name":           "Name",
+        "group_name":     "Sector",
+        "return_pct":     "Return %",
+        "percentile_rank":"Percentile",
+        "dollar_volume":  "Dollar Volume",
+        "end_volume":     "Volume",
+        "start_close":    "Start Close",
+        "end_close":      "End Close",
+    })
+
+    vmin, vmax = color_range
+
+    styled = (
+        tdf.style
+        # Same RdYlGn palette + clip range as the treemap
+        .background_gradient(
+            cmap="RdYlGn",
+            subset=["Return %"],
+            vmin=vmin,
+            vmax=vmax,
+        )
+        # Horizontal bar for percentile: red at 0, green at 100
+        .bar(
+            subset=["Percentile"],
+            color=["#ef5350", "#26a69a"],
+            vmin=0,
+            vmax=100,
+        )
+        .format({
+            "Return %":     "{:+.2f}%",
+            "Percentile":   "{:.0f}",
+            "Dollar Volume":"${:,.0f}",
+            "Volume":       "{:,.0f}",
+            "Start Close":  "${:.2f}",
+            "End Close":    "${:.2f}",
+        })
+    )
+
+    st.caption(
+        f"{len(tdf)} symbols · sortable by any column · "
+        "color scale clipped to the same ±range as the treemap"
+    )
+    st.dataframe(styled, use_container_width=True)
+
+
 def main() -> None:
     st.set_page_config(page_title="Market Heatmap", layout="wide")
     st.markdown(
@@ -817,14 +888,25 @@ def main() -> None:
             f"{df.loc[df['return_pct'].idxmin(), 'symbol']} ({df['return_pct'].min():.2f}%)",
         )
 
-        fig = build_fig(df, color_range=color_range)
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        view_toggle = st.radio(
+            "View",
+            ["Treemap", "Ranked Table"],
+            horizontal=True,
+            key="heatmap_view_toggle",
+            label_visibility="collapsed",
+        )
 
-        with st.expander("Show raw data"):
-            st.dataframe(
-                df.sort_values("return_pct", ascending=False).reset_index(drop=True),
-                use_container_width=True,
-            )
+        if view_toggle == "Treemap":
+            fig = build_fig(df, color_range=color_range)
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+
+            with st.expander("Show raw data"):
+                st.dataframe(
+                    df.sort_values("return_pct", ascending=False).reset_index(drop=True),
+                    use_container_width=True,
+                )
+        else:
+            render_ranked_table(df, color_range)
 
     with tab_synopsis:
         sectors = sorted(df["group_name"].dropna().unique())
