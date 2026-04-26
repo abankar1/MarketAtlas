@@ -43,6 +43,5 @@ backups/
 #Claude
 .claude
 
-# Internal documentation — not for public repo
-AGENTS.md
-docs/
+# Documentation is tracked in the repo
+# (AGENTS.md and docs/ are intentionally committed)
