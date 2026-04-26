@@ -110,6 +110,11 @@ def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None
     st.session_state["date_to"] = max(min_day, min(d_to, end_max_day))
 
 
+def _on_tab_click(tab_name: str) -> None:
+    """on_click callback for custom tab navigation buttons."""
+    st.session_state["active_tab"] = tab_name
+
+
 def build_universe_sql(index_key: str) -> str:
     # Normalize the universe into: symbol, group_name, index_name.
     # Sector always comes from assets.gics_sector (unified GICS standard).
@@ -947,11 +952,31 @@ def main() -> None:
         )
         st.stop()
 
-    tab_heatmap, tab_synopsis, tab_detail = st.tabs(
-        ["Heatmap", "Sector Synopsis", "Stock Detail"]
-    )
+    # --- Session-state tab navigation ---
+    # st.tabs resets to tab 0 on every full page rerun in Streamlit 1.53 (key= not
+    # supported). Storing the active view in session_state and rendering via if/elif
+    # guarantees the correct view survives any rerun — sidebar changes, date presets,
+    # sector dropdown, etc.
+    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail"]
+    if "active_tab" not in st.session_state:
+        st.session_state["active_tab"] = "Heatmap"
 
-    with tab_heatmap:
+    _tab_cols = st.columns(len(_TABS))
+    for _col, _tab_name in zip(_tab_cols, _TABS):
+        _col.button(
+            _tab_name,
+            key=f"tab_nav_{_tab_name}",
+            type="primary" if st.session_state["active_tab"] == _tab_name else "secondary",
+            use_container_width=True,
+            on_click=_on_tab_click,
+            kwargs={"tab_name": _tab_name},
+        )
+
+    st.divider()
+
+    _active_tab = st.session_state["active_tab"]
+
+    if _active_tab == "Heatmap":
         # Top KPIs
         cols = st.columns(4)
         cols[0].metric("Symbols", f"{len(df)}")
@@ -987,7 +1012,7 @@ def main() -> None:
         else:
             render_ranked_table(df, color_range)
 
-    with tab_synopsis:
+    elif _active_tab == "Sector Synopsis":
         sectors = sorted(df["group_name"].dropna().unique())
         if not sectors:
             st.warning("No sector data available for this universe.")
@@ -999,7 +1024,7 @@ def main() -> None:
             )
             render_sector_synopsis(df, selected_sector, range_label, db_url, date_from, date_to)
 
-    with tab_detail:
+    elif _active_tab == "Stock Detail":
         render_stock_detail(df, db_url, date_from, date_to)
 
 
