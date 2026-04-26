@@ -264,12 +264,13 @@ def main() -> None:
     # -----------------------------------------------------------------------
     cache_size = 24
     st.sidebar.subheader("Cache")
-    if st.sidebar.button("Clear cached results"):
-        _get_session_cache().clear()
-        _get_ohlcv_cache().clear()
-        st.session_state["treemap_cache_hits"]   = 0
-        st.session_state["treemap_cache_misses"] = 0
-        st.sidebar.success("Cleared cache")
+    # --- Clear cache button (hidden; uncomment to re-enable) ---
+    # if st.sidebar.button("Clear cached results"):
+    #     _get_session_cache().clear()
+    #     _get_ohlcv_cache().clear()
+    #     st.session_state["treemap_cache_hits"]   = 0
+    #     st.session_state["treemap_cache_misses"] = 0
+    #     st.sidebar.success("Cleared cache")
     _tm_hits   = st.session_state.get("treemap_cache_hits",   0)
     _tm_misses = st.session_state.get("treemap_cache_misses", 0)
     _tm_slots  = len(_get_session_cache())
