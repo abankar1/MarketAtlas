@@ -47,6 +47,13 @@ def _contrast(rgb_str: str) -> str:
 
 _SEQUENTIAL_SCALES = {"Viridis", "Plasma", "Inferno", "Magma", "Cividis"}
 
+# label → Plotly colorscale name (shown in the heatmap tab controls)
+_PALETTE_OPTIONS: dict[str, str] = {
+    "RdYlGn (default)":       "RdYlGn",
+    "RdBu (colorblind-safe)": "RdBu",
+    "Viridis (sequential)":   "Viridis",
+}
+
 
 def render_ranked_table(
     df: pd.DataFrame,
@@ -170,15 +177,12 @@ def _build_export_csv(df: pd.DataFrame) -> bytes:
 
 def render_heatmap_tab(
     df: pd.DataFrame,
-    color_range: tuple[float, float],
     range_label: str,
     index_key: str = "all",
     date_from: dt.date | None = None,
     date_to: dt.date | None = None,
-    color_scale: str = "RdYlGn",
-    center_zero: bool = True,
 ) -> None:
-    """Render the full Heatmap tab: sector filter, KPI row, view toggle, treemap or ranked table."""
+    """Render the full Heatmap tab: sector filter, color controls, KPI row, view toggle, treemap or ranked table."""
     # ------------------------------------------------------------------
     # Sector filter (in-memory — no new DB query)
     # ------------------------------------------------------------------
@@ -204,6 +208,36 @@ def render_heatmap_tab(
     if df.empty:
         st.info("No data for the selected sectors — clear the filter to see all symbols.")
         return
+
+    # ------------------------------------------------------------------
+    # Color controls (heatmap-specific — clip range, palette, midpoint)
+    # ------------------------------------------------------------------
+    if "heatmap_clip" not in st.session_state:
+        st.session_state["heatmap_clip"] = 10
+
+    _cc1, _cc2, _cc3 = st.columns([3, 3, 2])
+    clip = _cc1.slider(
+        "Clip ±%", min_value=1, max_value=50,
+        key="heatmap_clip",
+        help="Return % values beyond ±X are clamped to the color boundary.",
+    )
+    color_range = (-float(clip), float(clip))
+
+    color_scale = _PALETTE_OPTIONS[_cc2.selectbox(
+        "Color palette",
+        list(_PALETTE_OPTIONS.keys()),
+        key="color_palette",
+    )]
+    center_zero = _cc3.toggle(
+        "Center on 0%",
+        value=True,
+        key="center_zero",
+        help=(
+            "ON: neutral colour at 0% — green = gain, red = loss.\n\n"
+            "OFF: neutral colour at the period median — highlights "
+            "relative out/under-performers on broadly trending days."
+        ),
+    )
 
     # KPI row
     cols = st.columns(4)
