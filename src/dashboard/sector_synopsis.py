@@ -205,10 +205,12 @@ def render_sector_synopsis(
         marker_color=bar_colors,
         text=[f"{r:+.2f}%" for r in sdf["return_pct"]],
         textposition="outside",
-        customdata=sdf[["name", "start_close", "end_close", "dollar_volume"]].values,
+        customdata=sdf.assign(
+            _ret=sdf["return_pct"].map(lambda v: f"{v:+.2f}%")
+        )[["name", "start_close", "end_close", "dollar_volume", "_ret"]].values,
         hovertemplate=(
             "<b>%{y}</b>  %{customdata[0]}<br>"
-            "Return: <b>%{x:+.2f}%</b><br>"
+            "Return: <b>%{customdata[4]}</b><br>"
             "Start: $%{customdata[1]:.2f} → End: $%{customdata[2]:.2f}<br>"
             "Dollar volume: $%{customdata[3]:,.0f}"
             "<extra></extra>"
