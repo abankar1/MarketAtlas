@@ -178,7 +178,33 @@ def render_heatmap_tab(
     color_scale: str = "RdYlGn",
     center_zero: bool = True,
 ) -> None:
-    """Render the full Heatmap tab: KPI row, view toggle, treemap or ranked table."""
+    """Render the full Heatmap tab: sector filter, KPI row, view toggle, treemap or ranked table."""
+    # ------------------------------------------------------------------
+    # Sector filter (in-memory — no new DB query)
+    # ------------------------------------------------------------------
+    all_sectors = sorted(df["group_name"].dropna().unique().tolist())
+
+    # Clamp any stale session values to sectors present in this universe
+    if "heatmap_sector_filter" not in st.session_state:
+        st.session_state["heatmap_sector_filter"] = []
+    _stored = st.session_state["heatmap_sector_filter"]
+    _clamped = [s for s in _stored if s in all_sectors]
+    if _clamped != _stored:
+        st.session_state["heatmap_sector_filter"] = _clamped
+
+    selected_sectors = st.multiselect(
+        "Sectors",
+        options=all_sectors,
+        key="heatmap_sector_filter",
+        placeholder="All sectors",
+    )
+    if selected_sectors:
+        df = df[df["group_name"].isin(selected_sectors)].copy()
+
+    if df.empty:
+        st.info("No data for the selected sectors — clear the filter to see all symbols.")
+        return
+
     # KPI row
     cols = st.columns(4)
     cols[0].metric("Symbols", f"{len(df)}")
@@ -192,36 +218,46 @@ def render_heatmap_tab(
         f"{df.loc[df['return_pct'].idxmin(), 'symbol']} ({df['return_pct'].min():.2f}%)",
     )
 
-    # View toggle + CSV download in the same row
-    _toggle_col, _dl_col = st.columns([4, 1])
-    with _toggle_col:
-        view_toggle = st.radio(
-            "View",
-            ["Treemap", "Ranked Table"],
-            horizontal=True,
-            key="heatmap_view_toggle",
-            label_visibility="collapsed",
-        )
-    with _dl_col:
-        _d_from = date_from.isoformat() if date_from else "start"
-        _d_to   = date_to.isoformat()   if date_to   else "end"
-        _over_limit = (
-            _exceeds_three_months(date_from, date_to)
-            if (date_from and date_to) else False
-        )
-        st.download_button(
-            label="⬇ Export CSV",
-            data=_build_export_csv(df) if not _over_limit else b"",
-            file_name=f"{index_key}_{_d_from}_{_d_to}_heatmap.csv",
-            mime="text/csv",
-            use_container_width=True,
-            disabled=_over_limit,
-            help=(
-                "Export limited to ranges of 3 months or less — narrow the date range to enable."
-                if _over_limit
-                else "Download symbol, name, sector, return %, dollar volume, percentile rank"
-            ),
-        )
+    # View toggle (full width — CSV export hidden; re-enable _dl_col block below to restore)
+    view_toggle = st.radio(
+        "View",
+        ["Treemap", "Ranked Table"],
+        horizontal=True,
+        key="heatmap_view_toggle",
+        label_visibility="collapsed",
+    )
+
+    # --- CSV export (hidden; uncomment _toggle_col/_dl_col split + this block to re-enable) ---
+    # _toggle_col, _dl_col = st.columns([4, 1])
+    # with _toggle_col:
+    #     view_toggle = st.radio(
+    #         "View",
+    #         ["Treemap", "Ranked Table"],
+    #         horizontal=True,
+    #         key="heatmap_view_toggle",
+    #         label_visibility="collapsed",
+    #     )
+    # with _dl_col:
+    #     _d_from = date_from.isoformat() if date_from else "start"
+    #     _d_to   = date_to.isoformat()   if date_to   else "end"
+    #     _over_limit = (
+    #         _exceeds_three_months(date_from, date_to)
+    #         if (date_from and date_to) else False
+    #     )
+    #     st.download_button(
+    #         label="⬇ Export CSV",
+    #         data=_build_export_csv(df) if not _over_limit else b"",
+    #         file_name=f"{index_key}_{_d_from}_{_d_to}_heatmap.csv",
+    #         mime="text/csv",
+    #         use_container_width=True,
+    #         disabled=_over_limit,
+    #         help=(
+    #             "Export limited to ranges of 3 months or less — narrow the date range to enable."
+    #             if _over_limit
+    #             else "Download symbol, name, sector, return %, dollar volume, percentile rank"
+    #         ),
+    #     )
+    # --- end CSV export ---
 
     if view_toggle == "Treemap":
         fig = build_fig(df, color_range=color_range,
