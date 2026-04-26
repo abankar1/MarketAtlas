@@ -42,3 +42,7 @@ backups/
 
 #Claude
 .claude
+
+# Internal documentation — not for public repo
+AGENTS.md
+docs/
