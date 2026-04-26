@@ -13,7 +13,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from src.dashboard.charts import build_detail_fig
+from src.dashboard.charts import build_compare_fig, build_detail_fig
 from src.dashboard.data import fetch_index_overlap, get_ohlcv_cached
 
 
@@ -91,38 +91,97 @@ def render_stock_detail(
         if _html:
             st.markdown(_html, unsafe_allow_html=True)
 
-    active_indicators = st.multiselect(
-        "Overlays",
-        ["SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI", "MACD", "ATR", "OBV"],
-        default=["SMA 20", "SMA 50"],
-        key="detail_indicators",
+    # Chart mode toggle
+    chart_mode = st.radio(
+        "Chart mode",
+        ["Candlestick", "Compare"],
+        horizontal=True,
+        key="detail_chart_mode",
+        label_visibility="collapsed",
     )
 
-    with st.spinner(f"Loading {selected_symbol}..."):
-        df_ohlcv = get_ohlcv_cached(db_url, selected_symbol, date_from, date_to)
+    # ----------------------------------------------------------------
+    # Compare mode
+    # ----------------------------------------------------------------
+    if chart_mode == "Compare":
+        # Build simple label list (no return % — normalisation makes it irrelevant)
+        _compare_options = [
+            f"{row.symbol} — {row.name}"
+            for row in symbol_returns.itertuples()
+            if row.symbol != selected_symbol
+        ]
+        _compare_map = {
+            f"{row.symbol} — {row.name}": row.symbol
+            for row in symbol_returns.itertuples()
+            if row.symbol != selected_symbol
+        }
 
-    if df_ohlcv.empty:
-        st.warning("No price data found for this symbol in the selected date range.")
-    else:
-        _n = len(df_ohlcv)
-        _needs = []
-        if _n < 50 and "SMA 50" in active_indicators:
-            _needs.append("SMA 50: 50 bars")
-        if _n < 21 and "Bollinger Bands" in active_indicators:
-            _needs.append("Bollinger Bands: 21 bars")
-        if _n < 15 and "RSI" in active_indicators:
-            _needs.append("RSI: 15 bars")
-        if _n < 35 and "MACD" in active_indicators:
-            _needs.append("MACD: 35 bars")
-        if _n < 15 and "ATR" in active_indicators:
-            _needs.append("ATR: 15 bars")
-        if _needs:
-            st.warning(
-                f"Only {_n} bars in range — some indicators need more data: "
-                + ", ".join(_needs) + ". Extend the date range for complete signals."
-            )
-        st.plotly_chart(
-            build_detail_fig(df_ohlcv, selected_symbol, active_indicators),
-            use_container_width=True,
-            theme=None,
+        compare_displays = st.multiselect(
+            "Compare with",
+            options=_compare_options,
+            max_selections=3,
+            key="detail_compare_symbols",
+            placeholder="Add up to 3 symbols…",
         )
+        compare_symbols = [_compare_map[d] for d in compare_displays]
+
+        # Fetch all series (primary + comparisons) — all already cached
+        with st.spinner("Loading data…"):
+            series: dict[str, pd.DataFrame] = {
+                selected_symbol: get_ohlcv_cached(db_url, selected_symbol, date_from, date_to)
+            }
+            for sym in compare_symbols:
+                series[sym] = get_ohlcv_cached(db_url, sym, date_from, date_to)
+
+        # Drop symbols with no data
+        series = {s: d for s, d in series.items() if not d.empty}
+
+        if not series:
+            st.warning("No price data found for the selected symbols in this date range.")
+        else:
+            st.caption("Each series rebased to 100 at the first bar of the date range.")
+            st.plotly_chart(
+                build_compare_fig(series, primary=selected_symbol),
+                use_container_width=True,
+                theme=None,
+            )
+
+    # ----------------------------------------------------------------
+    # Candlestick mode
+    # ----------------------------------------------------------------
+    else:
+        active_indicators = st.multiselect(
+            "Overlays",
+            ["SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI", "MACD", "ATR", "OBV"],
+            default=["SMA 20", "SMA 50"],
+            key="detail_indicators",
+        )
+
+        with st.spinner(f"Loading {selected_symbol}…"):
+            df_ohlcv = get_ohlcv_cached(db_url, selected_symbol, date_from, date_to)
+
+        if df_ohlcv.empty:
+            st.warning("No price data found for this symbol in the selected date range.")
+        else:
+            _n = len(df_ohlcv)
+            _needs = []
+            if _n < 50 and "SMA 50" in active_indicators:
+                _needs.append("SMA 50: 50 bars")
+            if _n < 21 and "Bollinger Bands" in active_indicators:
+                _needs.append("Bollinger Bands: 21 bars")
+            if _n < 15 and "RSI" in active_indicators:
+                _needs.append("RSI: 15 bars")
+            if _n < 35 and "MACD" in active_indicators:
+                _needs.append("MACD: 35 bars")
+            if _n < 15 and "ATR" in active_indicators:
+                _needs.append("ATR: 15 bars")
+            if _needs:
+                st.warning(
+                    f"Only {_n} bars in range — some indicators need more data: "
+                    + ", ".join(_needs) + ". Extend the date range for complete signals."
+                )
+            st.plotly_chart(
+                build_detail_fig(df_ohlcv, selected_symbol, active_indicators),
+                use_container_width=True,
+                theme=None,
+            )

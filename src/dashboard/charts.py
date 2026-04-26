@@ -3,6 +3,7 @@ Plotly chart builders shared across dashboard tabs.
 
 build_fig(df, color_range)              Treemap heatmap figure
 build_detail_fig(df, symbol, active)    3-panel candlestick figure
+build_compare_fig(series, primary)      Normalised multi-symbol comparison
 """
 from __future__ import annotations
 
@@ -290,5 +291,77 @@ def build_detail_fig(
     fig.update_yaxes(title_text="Volume", row=2, col=1)
     for p in sub_panels:
         fig.update_yaxes(title_text=_panel_titles[p], row=panel_row[p], col=1)
+
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Normalised comparison chart
+# ---------------------------------------------------------------------------
+
+# Primary symbol gets a distinct bright colour; comparisons cycle through rest.
+_COMPARE_COLORS = ["#FFD600", "#26C6DA", "#FF6F00", "#AB47BC"]
+
+
+def build_compare_fig(
+    series: dict[str, pd.DataFrame],
+    primary: str,
+) -> go.Figure:
+    """
+    Normalised performance comparison: each close series rebased to 100 at its
+    first available bar so all symbols start at the same point.
+
+    series   ordered dict {symbol: ohlcv_df}; primary should be first entry.
+    primary  ticker of the main symbol (rendered wider + yellow).
+    """
+    fig = go.Figure()
+
+    for i, (sym, df) in enumerate(series.items()):
+        if df.empty:
+            continue
+        close      = df["close"]
+        base       = close.iloc[0]
+        normalized = close / base * 100
+
+        is_primary = sym == primary
+        color      = _COMPARE_COLORS[i % len(_COMPARE_COLORS)]
+        width      = 2.5 if is_primary else 1.8
+
+        # Pre-format return for hover (Plotly d3 arithmetic not reliable)
+        ret_strs = [(f"{v - 100:+.2f}%") for v in normalized]
+
+        fig.add_trace(go.Scatter(
+            x=df["date"],
+            y=normalized.round(2),
+            mode="lines",
+            name=sym,
+            line=dict(color=color, width=width),
+            customdata=ret_strs,
+            hovertemplate=(
+                f"<b>{sym}</b>: %{{y:.2f}}"
+                "  (%{customdata})<extra></extra>"
+            ),
+        ))
+
+    fig.add_hline(
+        y=100,
+        line_color="rgba(255,255,255,0.25)",
+        line_width=1,
+        line_dash="dot",
+    )
+
+    fig.update_layout(
+        height=480,
+        margin=dict(t=30, l=60, r=20, b=20),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        yaxis=dict(
+            title="Normalised (base = 100)",
+            gridcolor="rgba(255,255,255,0.1)",
+            zeroline=False,
+        ),
+        xaxis=dict(gridcolor="rgba(255,255,255,0.1)", zeroline=False),
+        xaxis_rangeslider_visible=False,
+    )
 
     return fig
