@@ -37,6 +37,7 @@ from src.dashboard.data import (  # noqa: E402
 )
 from src.dashboard.heatmap import render_heatmap_tab  # noqa: E402
 from src.dashboard.index_overlap import render_index_overlap_tab  # noqa: E402
+from src.dashboard.prefs import load_prefs, save_prefs  # noqa: E402
 from src.dashboard.sector_synopsis import render_sector_synopsis_tab  # noqa: E402
 from src.dashboard.stock_detail import render_stock_detail  # noqa: E402
 
@@ -121,6 +122,48 @@ def _on_tab_click(tab_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Pref seeding — runs once per browser session
+# ---------------------------------------------------------------------------
+
+_VALID_INDEX_LABELS   = set(INDEX_OPTIONS.keys())
+_VALID_SIZE_BY_LABELS = set(_SIZE_BY_OPTIONS.keys())
+_VALID_PRESET_LABELS  = set(_DATE_PRESETS.keys())
+_VALID_PALETTE_LABELS = {"RdYlGn (default)", "RdBu (colorblind-safe)", "Viridis (sequential)"}
+_VALID_INDICATORS     = {"SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI", "MACD", "ATR", "OBV"}
+
+
+def _seed_prefs_once() -> None:
+    """
+    On the very first run of a browser session, read ~/.marketatlas/prefs.json
+    and pre-populate session_state with validated values.  Subsequent reruns
+    skip this so in-session widget changes are never overridden.
+    """
+    if st.session_state.get("_prefs_seeded"):
+        return
+    p = load_prefs()
+
+    if p.get("index") in _VALID_INDEX_LABELS:
+        st.session_state.setdefault("sidebar_index", p["index"])
+    else:
+        st.session_state.setdefault("sidebar_index", "All")
+
+    if p.get("size_by") in _VALID_SIZE_BY_LABELS:
+        st.session_state.setdefault("treemap_size_by", p["size_by"])
+
+    if p.get("default_preset") in _VALID_PRESET_LABELS:
+        st.session_state.setdefault("active_preset", p["default_preset"])
+
+    if p.get("palette") in _VALID_PALETTE_LABELS:
+        st.session_state.setdefault("color_palette", p["palette"])
+
+    if isinstance(p.get("indicators"), list):
+        valid = [i for i in p["indicators"] if i in _VALID_INDICATORS]
+        st.session_state.setdefault("detail_indicators", valid)
+
+    st.session_state["_prefs_seeded"] = True
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -134,6 +177,8 @@ def main() -> None:
         "</style>",
         unsafe_allow_html=True,
     )
+    _seed_prefs_once()
+
     st.title("Market Atlas")
     st.caption("Interactive Market Intelligence Dashboard")
 
@@ -153,7 +198,7 @@ def main() -> None:
     st.sidebar.header("Filters")
 
     index_label = st.sidebar.selectbox(
-        "Index universe", list(INDEX_OPTIONS.keys()), index=3
+        "Index universe", list(INDEX_OPTIONS.keys()), key="sidebar_index"
     )
     index_key = INDEX_OPTIONS[index_label]
 
@@ -335,6 +380,15 @@ def main() -> None:
 
     elif _active_tab == "Index Overlap":
         render_index_overlap_tab(db_url)
+
+    # Persist UI prefs to disk so they survive tab close / refresh.
+    save_prefs({
+        "index":          st.session_state.get("sidebar_index",    "All"),
+        "palette":        st.session_state.get("color_palette",    "RdYlGn (default)"),
+        "size_by":        st.session_state.get("treemap_size_by",  "Dollar volume"),
+        "indicators":     st.session_state.get("detail_indicators", ["SMA 20", "SMA 50"]),
+        "default_preset": st.session_state.get("active_preset",    "3M"),
+    })
 
 
 if __name__ == "__main__":
