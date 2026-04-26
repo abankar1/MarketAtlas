@@ -1,8 +1,8 @@
 """
 Heatmap tab — treemap and ranked-table views.
 
-render_heatmap_tab(df, color_range, range_label, index_key, date_from, date_to)
-    renders the full tab; includes a CSV download button for the heatmap data.
+render_heatmap_tab(df, index_key, date_from, date_to)
+    renders the full tab: sector filter, color controls, movers strip, treemap or ranked table.
 render_ranked_table(df, color_range)
     ranked table helper (symbol, name, sector, return %, percentile, volume).
 """
@@ -186,18 +186,78 @@ def _build_export_csv(df: pd.DataFrame) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Top movers strip
+# ---------------------------------------------------------------------------
+
+
+def _render_movers_strip(
+    df: pd.DataFrame,
+    color_range: tuple[float, float],
+    color_scale: str,
+    center_zero: bool,
+) -> None:
+    """
+    Compact two-row strip: top-N gainers (▲) and top-N losers (▼).
+
+    Each cell is a small card with a colored left-border chip, the ticker,
+    and the return % rendered in the palette colour. N = min(5, len(df)).
+    Respects whatever sector filter is already applied to df.
+    """
+    n = min(5, len(df))
+    if n == 0:
+        return
+
+    vmin, vmax = color_range
+    is_sequential = color_scale in _SEQUENTIAL_SCALES
+    midpoint = 0.0 if center_zero else float(df["return_pct"].median())
+
+    def _color(val: float) -> str:
+        if is_sequential:
+            span = vmax - vmin
+            t = max(0.0, min(1.0, (val - vmin) / span)) if span else 0.5
+        else:
+            t = _cell_t(val, vmin, vmax, midpoint)
+        return pc.sample_colorscale(color_scale, [t])[0]
+
+    def _row(label: str, subset: pd.DataFrame) -> None:
+        st.caption(label)
+        cols = st.columns(n)
+        for col, (_, row) in zip(cols, subset.iterrows()):
+            pct = row["return_pct"]
+            color = _color(pct)
+            sign = "+" if pct >= 0 else ""
+            col.markdown(
+                f'<div style="'
+                f"padding:6px 10px;"
+                f"border-radius:6px;"
+                f"border-left:4px solid {color};"
+                f"background:rgba(255,255,255,0.04);"
+                f'margin-bottom:2px">'
+                f'<div style="font-size:0.70em;color:#aaa;'
+                f'letter-spacing:0.05em;font-weight:600">'
+                f'{row["symbol"]}</div>'
+                f'<div style="font-size:0.95em;font-weight:700;color:{color}">'
+                f"{sign}{pct:.2f}%</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    _row(f"Top {n} ▲", df.nlargest(n, "return_pct"))
+    _row(f"Top {n} ▼", df.nsmallest(n, "return_pct"))
+
+
+# ---------------------------------------------------------------------------
 # Tab entry point
 # ---------------------------------------------------------------------------
 
 
 def render_heatmap_tab(
     df: pd.DataFrame,
-    range_label: str,
     index_key: str = "all",
     date_from: dt.date | None = None,
     date_to: dt.date | None = None,
 ) -> None:
-    """Render the full Heatmap tab: sector filter, color controls, KPI row, view toggle, treemap or ranked table."""
+    """Render the full Heatmap tab: sector filter, color controls, movers strip, view toggle, treemap or ranked table."""
     # ------------------------------------------------------------------
     # Controls row — sector filter + color settings (one compact line)
     # ------------------------------------------------------------------
@@ -259,21 +319,6 @@ def render_heatmap_tab(
         )
         return
 
-    # KPI row
-    cols = st.columns(4)
-    cols[0].metric("Symbols", f"{len(df)}")
-    cols[1].metric(
-        f"Median return ({range_label})", f"{df['return_pct'].median():.2f}%"
-    )
-    cols[2].metric(
-        f"Best ({range_label})",
-        f"{df.loc[df['return_pct'].idxmax(), 'symbol']} ({df['return_pct'].max():.2f}%)",
-    )
-    cols[3].metric(
-        f"Worst ({range_label})",
-        f"{df.loc[df['return_pct'].idxmin(), 'symbol']} ({df['return_pct'].min():.2f}%)",
-    )
-
     # View toggle (full width — CSV export hidden; re-enable _dl_col block below to restore)
     view_toggle = st.radio(
         "View",
@@ -316,6 +361,7 @@ def render_heatmap_tab(
     # --- end CSV export ---
 
     if view_toggle == "Treemap":
+        _render_movers_strip(df, color_range, color_scale, center_zero)
         fig = build_fig(
             df,
             color_range=color_range,

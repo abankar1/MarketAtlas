@@ -299,7 +299,7 @@ def main() -> None:
     _active_tab = st.session_state["active_tab"]
 
     if _active_tab == "Heatmap":
-        render_heatmap_tab(df, range_label, index_key, date_from, date_to)
+        render_heatmap_tab(df, index_key, date_from, date_to)
 
     elif _active_tab == "Sector Synopsis":
         render_sector_synopsis_tab(df, range_label, db_url, date_from, date_to)
