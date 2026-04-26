@@ -234,7 +234,13 @@ def render_sector_synopsis(
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         font_color="white",
-        xaxis=dict(gridcolor="rgba(255,255,255,0.1)", zeroline=False),
+        xaxis=dict(
+            gridcolor="rgba(255,255,255,0.1)",
+            zeroline=False,
+            tickformat="+.2f",
+            hoverformat="+.2f",
+            ticksuffix="%",
+        ),
     )
 
     event = st.plotly_chart(
