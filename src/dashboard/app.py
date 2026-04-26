@@ -264,17 +264,21 @@ def main() -> None:
     # -----------------------------------------------------------------------
     cache_size = 24
     st.sidebar.subheader("Cache")
-    st.sidebar.caption(
-        f"Entries: {len(_get_session_cache())} | "
-        f"Hits: {st.session_state.get('treemap_cache_hits', 0)} | "
-        f"Misses: {st.session_state.get('treemap_cache_misses', 0)}"
-    )
     if st.sidebar.button("Clear cached results"):
         _get_session_cache().clear()
         _get_ohlcv_cache().clear()
         st.session_state["treemap_cache_hits"]   = 0
         st.session_state["treemap_cache_misses"] = 0
         st.sidebar.success("Cleared cache")
+    _tm_hits   = st.session_state.get("treemap_cache_hits",   0)
+    _tm_misses = st.session_state.get("treemap_cache_misses", 0)
+    _tm_slots  = len(_get_session_cache())
+    _ov_slots  = len(_get_ohlcv_cache())
+    st.sidebar.caption(
+        f"Treemap: {_tm_hits} hits, {_tm_misses} misses "
+        f"· {_tm_slots} of {cache_size} slots used"
+    )
+    st.sidebar.caption(f"OHLCV: {_ov_slots} series cached")
 
     # -----------------------------------------------------------------------
     # Data fetch (shared across all views)
