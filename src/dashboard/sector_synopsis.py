@@ -288,16 +288,6 @@ def render_sector_synopsis(
                     theme=None,
                 )
 
-    with st.expander("Show raw data"):
-        display = sdf[
-            ["symbol", "name", "return_pct", "start_close", "end_close", "dollar_volume"]
-        ].copy()
-        display.columns = ["Symbol", "Name", "Return %", "Start Close", "End Close", "Dollar Volume"]
-        display["Return %"]      = display["Return %"].map(lambda x: f"{x:+.2f}%")
-        display["Start Close"]   = display["Start Close"].map(lambda x: f"${x:.2f}")
-        display["End Close"]     = display["End Close"].map(lambda x: f"${x:.2f}")
-        display["Dollar Volume"] = display["Dollar Volume"].map(lambda x: f"${x:,.0f}")
-        st.dataframe(display, use_container_width=True, hide_index=True)
 
 
 # ---------------------------------------------------------------------------

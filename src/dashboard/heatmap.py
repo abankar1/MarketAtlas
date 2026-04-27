@@ -381,12 +381,6 @@ def render_heatmap_tab(
             values_col=_values_col,
         )
         st.plotly_chart(fig, use_container_width=True, theme=None)
-
-        with st.expander("Show raw data"):
-            st.dataframe(
-                df.sort_values("return_pct", ascending=False).reset_index(drop=True),
-                use_container_width=True,
-            )
     else:
         render_ranked_table(
             df, color_range, color_scale=color_scale, center_zero=center_zero
