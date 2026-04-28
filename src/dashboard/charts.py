@@ -136,7 +136,13 @@ def build_fig(
                 cmax=100.0,
                 cmid=midpoint,
                 line=dict(width=0),
-                colorbar=dict(title="Percentile", len=0.85),
+                colorbar=dict(
+                    title="Rank",
+                    len=0.85,
+                    tickmode="array",
+                    tickvals=[0, 50, 100],
+                    ticktext=["Worst", "Median", "Best"],
+                ),
             ),
             hovertemplate=(
                 "<b>%{label}</b><br>"
