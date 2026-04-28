@@ -128,7 +128,7 @@ def _on_tab_click(tab_name: str) -> None:
 _VALID_INDEX_LABELS   = set(INDEX_OPTIONS.keys())
 _VALID_SIZE_BY_LABELS = set(_SIZE_BY_OPTIONS.keys())
 _VALID_PRESET_LABELS  = set(_DATE_PRESETS.keys())
-_VALID_PALETTE_LABELS = {"RdYlGn (default)", "RdBu (colorblind-safe)", "Viridis (sequential)"}
+_VALID_PALETTE_LABELS = {"Finviz-style (default)", "RdYlGn", "RdBu (colorblind-safe)", "Viridis (sequential)"}
 _VALID_INDICATORS     = {"SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI", "MACD", "ATR", "OBV"}
 
 
@@ -290,19 +290,20 @@ def main() -> None:
         range_label = f"{days_span}d ({date_from.isoformat()} → {date_to.isoformat()})"
 
     # -----------------------------------------------------------------------
-    # Sidebar — heatmap display
+    # Sidebar — heatmap display (hidden; uncomment to re-enable size selector)
     # -----------------------------------------------------------------------
-    st.sidebar.subheader("Heatmap")
-    size_by = _SIZE_BY_OPTIONS[st.sidebar.selectbox(
-        "Size tiles by",
-        list(_SIZE_BY_OPTIONS.keys()),
-        key="treemap_size_by",
-        help=(
-            "Dollar volume — tile area ∝ end price × shares traded.\n\n"
-            "Equal weight — every tile the same size; colour is the only signal.\n\n"
-            "Magnitude — tile area ∝ |return %|; highlights movers regardless of liquidity."
-        ),
-    )]
+    # st.sidebar.subheader("Heatmap")
+    # size_by = _SIZE_BY_OPTIONS[st.sidebar.selectbox(
+    #     "Size tiles by",
+    #     list(_SIZE_BY_OPTIONS.keys()),
+    #     key="treemap_size_by",
+    #     help=(
+    #         "Dollar volume — tile area ∝ end price × shares traded.\n\n"
+    #         "Equal weight — every tile the same size; colour is the only signal.\n\n"
+    #         "Magnitude — tile area ∝ |return %|; highlights movers regardless of liquidity."
+    #     ),
+    # )]
+    size_by = "dollar_volume"
 
     # -----------------------------------------------------------------------
     # Sidebar — cache stats + clear
@@ -362,8 +363,6 @@ def main() -> None:
             kwargs={"tab_name": _tab_name},
         )
 
-    st.divider()
-
     # -----------------------------------------------------------------------
     # Active view
     # -----------------------------------------------------------------------
@@ -384,7 +383,7 @@ def main() -> None:
     # Persist UI prefs to disk so they survive tab close / refresh.
     save_prefs({
         "index":          st.session_state.get("sidebar_index",    "All"),
-        "palette":        st.session_state.get("color_palette",    "RdYlGn (default)"),
+        "palette":        st.session_state.get("color_palette",    "Finviz-style (default)"),
         "size_by":        st.session_state.get("treemap_size_by",  "Dollar volume"),
         "indicators":     st.session_state.get("detail_indicators", ["SMA 20", "SMA 50"]),
         "default_preset": st.session_state.get("active_preset",    "3M"),

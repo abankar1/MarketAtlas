@@ -49,11 +49,24 @@ def _contrast(rgb_str: str) -> str:
 
 _SEQUENTIAL_SCALES = {"Viridis", "Plasma", "Inferno", "Magma", "Cividis"}
 
-# label → Plotly colorscale name (shown in the heatmap tab controls)
-_PALETTE_OPTIONS: dict[str, str] = {
-    "RdYlGn (default)": "RdYlGn",
+# Finviz-style palette — dark red → dark grey → dark green, no yellow.
+# Quieter and more readable on a dark background than RdYlGn.
+_FINVIZ_LIKE: list[list] = [
+    [0.00, "#a11318"],
+    [0.25, "#82181c"],
+    [0.45, "#5a2c30"],
+    [0.50, "#3a3f42"],
+    [0.55, "#2c5325"],
+    [0.75, "#287a1a"],
+    [1.00, "#26a113"],
+]
+
+# label → Plotly colorscale (named string OR custom list of stops)
+_PALETTE_OPTIONS: dict[str, object] = {
+    "Finviz-style (default)": _FINVIZ_LIKE,
+    "RdYlGn":                 "RdYlGn",
     "RdBu (colorblind-safe)": "RdBu",
-    "Viridis (sequential)": "Viridis",
+    "Viridis (sequential)":   "Viridis",
 }
 
 
@@ -102,21 +115,20 @@ def render_ranked_table(
         }
     )
 
-    vmin, vmax = color_range
-    is_sequential = color_scale in _SEQUENTIAL_SCALES
-    midpoint = 0.0 if center_zero else float(df["return_pct"].median())
-
-    def _return_cell_style(val: float) -> str:
-        if is_sequential:
-            span = vmax - vmin
-            t = max(0.0, min(1.0, (val - vmin) / span)) if span else 0.5
-        else:
-            t = _cell_t(val, vmin, vmax, midpoint)
+    # Color "Return %" cells by percentile rank — same logic as the treemap
+    def _return_cell_style_by_pct(percentile: float) -> str:
+        t = max(0.0, min(1.0, percentile / 100.0))
         rgb = pc.sample_colorscale(color_scale, [t])[0]
         return f"background-color: {rgb}; color: {_contrast(rgb)}"
 
+    # Build a styler keyed off the Percentile column for the Return % cells
+    pct_styles = tdf["Percentile"].apply(_return_cell_style_by_pct)
+    return_cell_styles = pd.DataFrame(
+        {"Return %": pct_styles.values}, index=tdf.index
+    )
+
     styled = (
-        tdf.style.map(_return_cell_style, subset=["Return %"])
+        tdf.style.apply(lambda _: return_cell_styles, axis=None)
         .bar(subset=["Percentile"], color=["#ef5350", "#26a69a"], vmin=0, vmax=100)
         .format(
             {
@@ -192,31 +204,30 @@ def _build_export_csv(df: pd.DataFrame) -> bytes:
 
 def _render_movers_strip(
     df: pd.DataFrame,
-    color_range: tuple[float, float],
+    color_range: tuple[float, float],  # retained for API compat; ignored
     color_scale: str,
-    center_zero: bool,
+    center_zero: bool,                   # retained for API compat; ignored
 ) -> None:
     """
     Compact two-row strip: top-N gainers (▲) and top-N losers (▼).
 
     Each cell is a small card with a colored left-border chip, the ticker,
-    and the return % rendered in the palette colour. N = min(5, len(df)).
-    Respects whatever sector filter is already applied to df.
+    and the return % rendered in the palette colour matching the treemap
+    (percentile-rank within the visible df). N = min(5, len(df)).
     """
     n = min(5, len(df))
     if n == 0:
         return
 
-    vmin, vmax = color_range
-    is_sequential = color_scale in _SEQUENTIAL_SCALES
-    midpoint = 0.0 if center_zero else float(df["return_pct"].median())
+    # Percentile rank — matches the treemap's color logic exactly
+    if len(df) > 1:
+        ranks = df["return_pct"].rank(method="average", pct=True) * 100
+    else:
+        ranks = pd.Series([50.0] * len(df), index=df.index)
+    pct_by_symbol = dict(zip(df["symbol"], ranks))
 
-    def _color(val: float) -> str:
-        if is_sequential:
-            span = vmax - vmin
-            t = max(0.0, min(1.0, (val - vmin) / span)) if span else 0.5
-        else:
-            t = _cell_t(val, vmin, vmax, midpoint)
+    def _color(percentile: float) -> str:
+        t = max(0.0, min(1.0, percentile / 100.0))
         return pc.sample_colorscale(color_scale, [t])[0]
 
     def _row(label: str, subset: pd.DataFrame) -> None:
@@ -224,7 +235,7 @@ def _render_movers_strip(
         cols = st.columns(n)
         for col, (_, row) in zip(cols, subset.iterrows()):
             pct = row["return_pct"]
-            color = _color(pct)
+            color = _color(pct_by_symbol.get(row["symbol"], 50.0))
             sign = "+" if pct >= 0 else ""
             col.markdown(
                 f'<div style="'
@@ -273,10 +284,10 @@ def render_heatmap_tab(
         st.session_state["heatmap_sector_filter"] = _clamped
 
     if "heatmap_clip" not in st.session_state:
-        st.session_state["heatmap_clip"] = 10
+        st.session_state["heatmap_clip"] = 50
 
     with st.expander("Options", expanded=False):
-        _view_col, _f_col, _clip_col, _pal_col, _cz_col = st.columns([2, 3, 2, 2, 2], gap="large")
+        _view_col, _f_col, _pal_col = st.columns([2, 3, 2], gap="large")
 
         with _f_col:
             selected_sectors = st.multiselect(
@@ -286,15 +297,6 @@ def render_heatmap_tab(
                 placeholder="All sectors",
                 label_visibility="collapsed",
             )
-        clip = _clip_col.slider(
-            "Clip ±%",
-            min_value=1,
-            max_value=50,
-            key="heatmap_clip",
-            format="±%d%%",
-            help="Return % values beyond ±X are clamped to the color boundary.",
-            label_visibility="collapsed",
-        )
         color_scale = _PALETTE_OPTIONS[
             _pal_col.selectbox(
                 "Color palette",
@@ -303,16 +305,6 @@ def render_heatmap_tab(
                 label_visibility="collapsed",
             )
         ]
-        center_zero = _cz_col.toggle(
-            "Center on 0%",
-            value=True,
-            key="center_zero",
-            help=(
-                "ON: neutral colour at 0% — green = gain, red = loss.\n\n"
-                "OFF: neutral colour at the period median — highlights "
-                "relative out/under-performers on broadly trending days."
-            ),
-        )
         view_toggle = _view_col.radio(
             "View",
             ["Treemap", "Ranked Table"],
@@ -320,7 +312,18 @@ def render_heatmap_tab(
             label_visibility="collapsed",
         )
 
-    color_range = (-float(clip), float(clip))
+        # --- Clip slider + Center-on-0 toggle (hidden — heatmap now colours
+        #     by percentile rank so these have no effect; uncomment to restore
+        #     absolute-return colouring with manual clip range) ---
+        # clip = st.slider(
+        #     "Clip ±%", min_value=1, max_value=100,
+        #     key="heatmap_clip", format="±%d%%",
+        # )
+        # center_zero = st.toggle("Center on 0%", value=True, key="center_zero")
+
+    # Percentile mode ignores these but keeps the call signature stable.
+    color_range = (0.0, 100.0)
+    center_zero = True
 
     if selected_sectors:
         df = df[df["group_name"].isin(selected_sectors)].copy()

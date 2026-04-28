@@ -30,62 +30,129 @@ from src.dashboard.indicators import (
 
 def build_fig(
     df: pd.DataFrame,
-    color_range: tuple[float, float],
+    color_range: tuple[float, float],  # retained for API compat; ignored
     color_scale: str = "RdYlGn",
-    center_zero: bool = True,
+    center_zero: bool = True,           # retained for API compat; ignored
     values_col: str = "dollar_volume",
-) -> px.treemap:
+) -> go.Figure:
     """
-    Build the treemap colored by return %.
+    Build the treemap colored by percentile rank of return % (0 = worst,
+    100 = best within the current universe).
+
+    Percentile coloring keeps the scale well-distributed regardless of
+    outliers — a single +354% return no longer washes everything else
+    into the same boundary green.
+
+    Implemented with go.Treemap so we control sector parent nodes
+    explicitly: each sector parent gets its own dollar-volume-weighted
+    return %, percentile (mean of children), and pre-formatted hover
+    string. Hover precision is therefore exact at every level.
 
     values_col     Column used to size tiles ('dollar_volume', '_size' for
                    equal-weight or magnitude modes).
     color_scale    Any Plotly named colorscale ('RdYlGn', 'RdBu', 'Viridis', …)
-    center_zero    True → diverging midpoint pinned at 0%.
-                   False → midpoint at period median return.
-                   Ignored for sequential scales (Viridis).
     """
-    # Diverging scales benefit from an explicit midpoint; sequential ones don't.
-    _SEQUENTIAL = {"Viridis", "Plasma", "Inferno", "Magma", "Cividis"}
-    midpoint_kwargs: dict = {}
-    if color_scale not in _SEQUENTIAL:
-        midpoint_kwargs["color_continuous_midpoint"] = (
-            0.0 if center_zero else float(df["return_pct"].median())
-        )
+    df = df.copy()
+    if len(df) > 1:
+        df["percentile"] = df["return_pct"].rank(method="average", pct=True) * 100
+    else:
+        df["percentile"] = 50.0
 
-    fig = px.treemap(
-        df,
-        path=["group_name", "symbol"],
-        values=values_col,
-        color="return_pct",
-        hover_data={
-            "start_close": ":.2f",
-            "end_close": ":.2f",
-            "dollar_volume": ":,.0f",
-            "index_name": True,
-        },
-        color_continuous_scale=color_scale,
-        range_color=color_range,
-        **midpoint_kwargs,
+    # ---- Sector aggregates ------------------------------------------------
+    def _weighted_return(g: pd.DataFrame) -> float:
+        w = g["dollar_volume"].sum()
+        return float((g["return_pct"] * g["dollar_volume"]).sum() / w) if w else float(g["return_pct"].mean())
+
+    def _weighted_close(g: pd.DataFrame, col: str) -> float:
+        w = g["dollar_volume"].sum()
+        return float((g[col] * g["dollar_volume"]).sum() / w) if w else float(g[col].mean())
+
+    sector_agg = (
+        df.groupby("group_name", dropna=False)
+        .apply(
+            lambda g: pd.Series(
+                {
+                    "value":          float(g[values_col].sum()),
+                    "return_pct":     _weighted_return(g),
+                    "percentile":     float(g["percentile"].mean()),
+                    "dollar_volume":  float(g["dollar_volume"].sum()),
+                    "n_stocks":       int(len(g)),
+                    "start_close":    _weighted_close(g, "start_close"),
+                    "end_close":      _weighted_close(g, "end_close"),
+                }
+            ),
+            include_groups=False,
+        )
+        .reset_index()
     )
 
-    fig.update_traces(
-        marker=dict(line=dict(width=0)),
-        hovertemplate=(
-            "<b>%{label}</b><br>"
-            "Return: %{color:.2f}%<br>"
-            "Start close: %{customdata[0]:.2f}<br>"
-            "End close: %{customdata[1]:.2f}<br>"
-            "Dollar volume: %{customdata[2]:,.0f}<br>"
-            "Index: %{customdata[3]}<br>"
-            "<extra></extra>"
-        ),
+    # ---- Build flat node lists (sectors first, then stocks) ---------------
+    leaf_ids   = (df["group_name"].astype(str) + "/" + df["symbol"].astype(str)).tolist()
+    sector_ids = sector_agg["group_name"].astype(str).tolist()
+
+    ids       = sector_ids + leaf_ids
+    labels    = sector_agg["group_name"].astype(str).tolist() + df["symbol"].astype(str).tolist()
+    parents   = [""] * len(sector_agg) + df["group_name"].astype(str).tolist()
+    values    = sector_agg["value"].tolist() + df[values_col].astype(float).tolist()
+    colors    = sector_agg["percentile"].tolist() + df["percentile"].astype(float).tolist()
+
+    # customdata layout: [return_str, close1_line, close2_line, dollar_volume_line]
+    sector_custom = [
+        [
+            f"{r['return_pct']:+.2f}%",                              # weighted-avg return
+            f"Avg start close: ${r['start_close']:.2f}",             # dollar-volume-weighted
+            f"Avg end close: ${r['end_close']:.2f}",                 # dollar-volume-weighted
+            f"${r['dollar_volume']:,.0f} · {int(r['n_stocks'])} stocks",
+        ]
+        for _, r in sector_agg.iterrows()
+    ]
+    leaf_custom = [
+        [
+            f"{row.return_pct:+.2f}%",
+            f"Start close: ${row.start_close:.2f}",
+            f"End close: ${row.end_close:.2f}",
+            f"${row.dollar_volume:,.0f}",
+        ]
+        for row in df.itertuples()
+    ]
+    customdata = sector_custom + leaf_custom
+
+    _SEQUENTIAL = {"Viridis", "Plasma", "Inferno", "Magma", "Cividis"}
+    is_sequential = isinstance(color_scale, str) and color_scale in _SEQUENTIAL
+    midpoint = None if is_sequential else 50.0
+
+    fig = go.Figure(
+        go.Treemap(
+            ids=ids,
+            labels=labels,
+            parents=parents,
+            values=values,
+            branchvalues="total",
+            customdata=customdata,
+            marker=dict(
+                colors=colors,
+                colorscale=color_scale,
+                cmin=0.0,
+                cmax=100.0,
+                cmid=midpoint,
+                line=dict(width=0),
+                colorbar=dict(title="Percentile", len=0.85),
+            ),
+            hovertemplate=(
+                "<b>%{label}</b><br>"
+                "Return: <b>%{customdata[0]}</b><br>"
+                "Percentile: %{color:.0f}<br>"
+                "%{customdata[1]}<br>"
+                "%{customdata[2]}<br>"
+                "Dollar volume: %{customdata[3]}<br>"
+                "<extra></extra>"
+            ),
+        )
     )
 
     fig.update_layout(
         height=640,
         margin=dict(t=20, l=6, r=6, b=6),
-        coloraxis_colorbar=dict(title="Return %", len=0.85),
         hoverlabel=dict(bgcolor="white", font_size=13, font_color="black"),
     )
 

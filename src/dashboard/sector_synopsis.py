@@ -21,18 +21,20 @@ import streamlit.components.v1 as st_components
 
 from src.dashboard.charts import build_detail_fig
 from src.dashboard.data import get_ohlcv_cached
+from src.dashboard.heatmap import _PALETTE_OPTIONS
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Maps session_state color_palette label → Plotly colorscale name
-_PALETTE_MAP: dict[str, str] = {
-    "RdYlGn (default)":       "RdYlGn",
-    "RdBu (colorblind-safe)": "RdBu",
-    "Viridis (sequential)":   "Viridis",
-}
+_DEFAULT_PALETTE_LABEL = "Finviz-style (default)"
+
+
+def _active_color_scale():
+    """Return the colorscale (string or list) for the user's selected palette."""
+    label = st.session_state.get("color_palette", _DEFAULT_PALETTE_LABEL)
+    return _PALETTE_OPTIONS.get(label, _PALETTE_OPTIONS[_DEFAULT_PALETTE_LABEL])
 
 
 def _fmt_dollar(v: float) -> str:
@@ -72,8 +74,7 @@ def _render_breadth_bar(breadth: pd.DataFrame) -> None:
     Horizontal bar chart: all sectors, sorted by breadth ascending
     (highest at top), coloured with the active heatmap palette.
     """
-    _palette_label = st.session_state.get("color_palette", "RdYlGn (default)")
-    _color_scale   = _PALETTE_MAP.get(_palette_label, "RdYlGn")
+    _color_scale = _active_color_scale()
 
     bar_colors = [
         pc.sample_colorscale(_color_scale, [b / 100])[0]
@@ -195,8 +196,16 @@ def render_sector_synopsis(
 
     st.markdown("---")
 
-    # Horizontal bar chart — stocks ranked by return %
-    bar_colors = ["#26a69a" if r >= 0 else "#ef5350" for r in sdf["return_pct"]]
+    # Horizontal bar chart — stocks ranked by return %, coloured by their
+    # percentile rank within this sector using the active heatmap palette.
+    _color_scale = _active_color_scale()
+    if len(sdf) > 1:
+        _ranks = sdf["return_pct"].rank(method="average", pct=True)
+    else:
+        _ranks = pd.Series([0.5] * len(sdf), index=sdf.index)
+    bar_colors = [
+        pc.sample_colorscale(_color_scale, [float(t)])[0] for t in _ranks
+    ]
 
     fig = go.Figure(go.Bar(
         x=sdf["return_pct"],
