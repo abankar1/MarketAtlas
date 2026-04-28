@@ -275,41 +275,52 @@ def render_heatmap_tab(
     if "heatmap_clip" not in st.session_state:
         st.session_state["heatmap_clip"] = 10
 
-    _f_col, _clip_col, _pal_col, _cz_col = st.columns([3, 2, 2, 2], gap="large")
+    with st.expander("Options", expanded=False):
+        _view_col, _f_col, _clip_col, _pal_col, _cz_col = st.columns([2, 3, 2, 2, 2], gap="large")
 
-    with _f_col:
-        selected_sectors = st.multiselect(
-            "Sectors",
-            options=all_sectors,
-            key="heatmap_sector_filter",
-            placeholder="All sectors",
+        with _f_col:
+            selected_sectors = st.multiselect(
+                "Sectors",
+                options=all_sectors,
+                key="heatmap_sector_filter",
+                placeholder="All sectors",
+                label_visibility="collapsed",
+            )
+        clip = _clip_col.slider(
+            "Clip ±%",
+            min_value=1,
+            max_value=50,
+            key="heatmap_clip",
+            format="±%d%%",
+            help="Return % values beyond ±X are clamped to the color boundary.",
             label_visibility="collapsed",
         )
-    clip = _clip_col.slider(
-        "Clip ±%",
-        min_value=1,
-        max_value=50,
-        key="heatmap_clip",
-        help="Return % values beyond ±X are clamped to the color boundary.",
-    )
-    color_range = (-float(clip), float(clip))
-    color_scale = _PALETTE_OPTIONS[
-        _pal_col.selectbox(
-            "Color palette",
-            list(_PALETTE_OPTIONS.keys()),
-            key="color_palette",
+        color_scale = _PALETTE_OPTIONS[
+            _pal_col.selectbox(
+                "Color palette",
+                list(_PALETTE_OPTIONS.keys()),
+                key="color_palette",
+                label_visibility="collapsed",
+            )
+        ]
+        center_zero = _cz_col.toggle(
+            "Center on 0%",
+            value=True,
+            key="center_zero",
+            help=(
+                "ON: neutral colour at 0% — green = gain, red = loss.\n\n"
+                "OFF: neutral colour at the period median — highlights "
+                "relative out/under-performers on broadly trending days."
+            ),
         )
-    ]
-    center_zero = _cz_col.toggle(
-        "Center on 0%",
-        value=True,
-        key="center_zero",
-        help=(
-            "ON: neutral colour at 0% — green = gain, red = loss.\n\n"
-            "OFF: neutral colour at the period median — highlights "
-            "relative out/under-performers on broadly trending days."
-        ),
-    )
+        view_toggle = _view_col.radio(
+            "View",
+            ["Treemap", "Ranked Table"],
+            key="heatmap_view_toggle",
+            label_visibility="collapsed",
+        )
+
+    color_range = (-float(clip), float(clip))
 
     if selected_sectors:
         df = df[df["group_name"].isin(selected_sectors)].copy()
@@ -319,47 +330,6 @@ def render_heatmap_tab(
             "No data for the selected sectors — clear the filter to see all symbols."
         )
         return
-
-    # View toggle (full width — CSV export hidden; re-enable _dl_col block below to restore)
-    view_toggle = st.radio(
-        "View",
-        ["Treemap", "Ranked Table"],
-        horizontal=True,
-        key="heatmap_view_toggle",
-        label_visibility="collapsed",
-    )
-
-    # --- CSV export (hidden; uncomment _toggle_col/_dl_col split + this block to re-enable) ---
-    # _toggle_col, _dl_col = st.columns([4, 1])
-    # with _toggle_col:
-    #     view_toggle = st.radio(
-    #         "View",
-    #         ["Treemap", "Ranked Table"],
-    #         horizontal=True,
-    #         key="heatmap_view_toggle",
-    #         label_visibility="collapsed",
-    #     )
-    # with _dl_col:
-    #     _d_from = date_from.isoformat() if date_from else "start"
-    #     _d_to   = date_to.isoformat()   if date_to   else "end"
-    #     _over_limit = (
-    #         _exceeds_three_months(date_from, date_to)
-    #         if (date_from and date_to) else False
-    #     )
-    #     st.download_button(
-    #         label="⬇ Export CSV",
-    #         data=_build_export_csv(df) if not _over_limit else b"",
-    #         file_name=f"{index_key}_{_d_from}_{_d_to}_heatmap.csv",
-    #         mime="text/csv",
-    #         use_container_width=True,
-    #         disabled=_over_limit,
-    #         help=(
-    #             "Export limited to ranges of 3 months or less — narrow the date range to enable."
-    #             if _over_limit
-    #             else "Download symbol, name, sector, return %, dollar volume, percentile rank"
-    #         ),
-    #     )
-    # --- end CSV export ---
 
     if view_toggle == "Treemap":
         # Prepare values column based on size_by mode

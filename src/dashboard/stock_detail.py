@@ -48,50 +48,13 @@ def render_stock_detail(
     before any Python code can correct a stale value and would cause an exception
     that resets the active tab.
     """
-    # Build option labels: "AAPL — Apple Inc.  (Information Technology, +12.3%)"
     symbol_returns = (
         df[["symbol", "name", "group_name", "return_pct"]]
         .sort_values("symbol")
         .reset_index(drop=True)
     )
-    symbol_options = [
-        f"{row.symbol} — {row.name}  ({row.group_name}, {row.return_pct:+.1f}%)"
-        for row in symbol_returns.itertuples()
-    ]
-    symbol_map = dict(zip(symbol_options, symbol_returns["symbol"]))
-    ticker_to_option: dict[str, str] = {sym: opt for opt, sym in symbol_map.items()}
 
-    # Resolve stored ticker → index in the current options list
-    _stored_ticker = st.session_state.get("detail_selected_ticker", "")
-    if _stored_ticker and _stored_ticker in ticker_to_option:
-        _default_idx = symbol_options.index(ticker_to_option[_stored_ticker])
-    else:
-        _default_idx = 0
-
-    selected_display = st.selectbox(
-        "Select symbol",
-        symbol_options,
-        index=_default_idx,
-        help="Click and type to search by ticker, company name, or sector.",
-    )
-
-    selected_symbol = symbol_map[selected_display]
-    st.session_state["detail_selected_ticker"] = selected_symbol
-
-    # Index membership badges (cached — no extra DB call)
-    _overlap = fetch_index_overlap(db_url)
-    _sym_row = _overlap[_overlap["symbol"] == selected_symbol]
-    if not _sym_row.empty:
-        _row = _sym_row.iloc[0]
-        _html = "".join(
-            f'<span style="{_INDEX_BADGE_STYLE}background:{color}">{label}</span>'
-            for col, label, color in _INDEX_BADGES
-            if _row[col]
-        )
-        if _html:
-            st.markdown(_html, unsafe_allow_html=True)
-
-    # Chart mode toggle
+    # Chart mode toggle — shown first so Compare mode can skip the primary selectbox
     chart_mode = st.radio(
         "Chart mode",
         ["Candlestick", "Compare"],
@@ -101,55 +64,87 @@ def render_stock_detail(
     )
 
     # ----------------------------------------------------------------
-    # Compare mode
+    # Compare mode — single multiselect, no primary distinction
     # ----------------------------------------------------------------
     if chart_mode == "Compare":
-        # Build simple label list (no return % — normalisation makes it irrelevant)
-        _compare_options = [
+        _all_options = [
             f"{row.symbol} — {row.name}"
             for row in symbol_returns.itertuples()
-            if row.symbol != selected_symbol
         ]
-        _compare_map = {
+        _all_map = {
             f"{row.symbol} — {row.name}": row.symbol
             for row in symbol_returns.itertuples()
-            if row.symbol != selected_symbol
         }
 
         compare_displays = st.multiselect(
-            "Compare with",
-            options=_compare_options,
-            max_selections=3,
+            "Symbols to compare",
+            options=_all_options,
+            max_selections=5,
             key="detail_compare_symbols",
-            placeholder="Add up to 3 symbols…",
+            placeholder="Add up to 5 symbols…",
         )
-        compare_symbols = [_compare_map[d] for d in compare_displays]
+        compare_symbols = [_all_map[d] for d in compare_displays]
 
-        # Fetch all series (primary + comparisons) — all already cached
-        with st.spinner("Loading data…"):
-            series: dict[str, pd.DataFrame] = {
-                selected_symbol: get_ohlcv_cached(db_url, selected_symbol, date_from, date_to)
-            }
-            for sym in compare_symbols:
-                series[sym] = get_ohlcv_cached(db_url, sym, date_from, date_to)
-
-        # Drop symbols with no data
-        series = {s: d for s, d in series.items() if not d.empty}
-
-        if not series:
-            st.warning("No price data found for the selected symbols in this date range.")
+        if not compare_symbols:
+            st.info("Select at least one symbol above to start comparing.")
         else:
-            st.caption("Each series rebased to 100 at the first bar of the date range.")
-            st.plotly_chart(
-                build_compare_fig(series, primary=selected_symbol),
-                use_container_width=True,
-                theme=None,
-            )
+            with st.spinner("Loading data…"):
+                series: dict[str, pd.DataFrame] = {
+                    sym: get_ohlcv_cached(db_url, sym, date_from, date_to)
+                    for sym in compare_symbols
+                }
+            series = {s: d for s, d in series.items() if not d.empty}
+
+            if not series:
+                st.warning("No price data found for the selected symbols in this date range.")
+            else:
+                st.caption("Each series rebased to 100 at the first bar of the date range.")
+                st.plotly_chart(
+                    build_compare_fig(series, primary=compare_symbols[0]),
+                    use_container_width=True,
+                    theme=None,
+                )
 
     # ----------------------------------------------------------------
     # Candlestick mode
     # ----------------------------------------------------------------
     else:
+        # Build option labels: "AAPL — Apple Inc.  (Information Technology, +12.3%)"
+        symbol_options = [
+            f"{row.symbol} — {row.name}  ({row.group_name}, {row.return_pct:+.1f}%)"
+            for row in symbol_returns.itertuples()
+        ]
+        symbol_map = dict(zip(symbol_options, symbol_returns["symbol"]))
+        ticker_to_option: dict[str, str] = {sym: opt for opt, sym in symbol_map.items()}
+
+        _stored_ticker = st.session_state.get("detail_selected_ticker", "AAPL")
+        if _stored_ticker and _stored_ticker in ticker_to_option:
+            _default_idx = symbol_options.index(ticker_to_option[_stored_ticker])
+        else:
+            _default_idx = 0
+
+        selected_display = st.selectbox(
+            "Select symbol",
+            symbol_options,
+            index=_default_idx,
+            help="Click and type to search by ticker, company name, or sector.",
+        )
+        selected_symbol = symbol_map[selected_display]
+        st.session_state["detail_selected_ticker"] = selected_symbol
+
+        # Index membership badges
+        _overlap = fetch_index_overlap(db_url)
+        _sym_row = _overlap[_overlap["symbol"] == selected_symbol]
+        if not _sym_row.empty:
+            _row = _sym_row.iloc[0]
+            _html = "".join(
+                f'<span style="{_INDEX_BADGE_STYLE}background:{color}">{label}</span>'
+                for col, label, color in _INDEX_BADGES
+                if _row[col]
+            )
+            if _html:
+                st.markdown(_html, unsafe_allow_html=True)
+
         active_indicators = st.multiselect(
             "Overlays",
             ["SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI", "MACD", "ATR", "OBV"],

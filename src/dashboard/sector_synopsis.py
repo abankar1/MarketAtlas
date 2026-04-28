@@ -336,6 +336,12 @@ def render_sector_synopsis_tab(
 
     st.divider()
 
+    # Seed with the top-performing sector on first load (no stored preference yet)
+    if "synopsis_sector" not in st.session_state:
+        _top = df.groupby("group_name")["return_pct"].mean().idxmax()
+        if _top in sectors:
+            st.session_state["synopsis_sector"] = _top
+
     selected_sector = st.selectbox("Select sector", sectors, key="synopsis_sector")
 
     # If the user overrode the breadth selection via the dropdown, clear the latch
