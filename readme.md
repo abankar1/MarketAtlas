@@ -8,7 +8,7 @@ Market Atlas is a data-driven platform that:
 
 - Ingests daily OHLCV stock data for S&P 500, NASDAQ-100, and Dow 30
 - Stores it in PostgreSQL with the TimescaleDB extension (time-series optimized)
-- Provides an interactive Streamlit dashboard — treemap heatmap + per-stock candlestick charts with technical indicators
+- Provides an interactive Streamlit dashboard — treemap heatmap, sector breadth, per-stock candlestick charts with technical indicators, and index overlap analysis
 - Auto-syncs index constituents monthly from [yfiua/index-constituents](https://github.com/yfiua/index-constituents)
 - Supports 10-year historical backfill and incremental daily updates
 
@@ -140,16 +140,18 @@ streamlit run src/dashboard/app.py
 
 Four tabs, all driven by the same sidebar filters:
 
-- **Heatmap** — treemap tiles sized by dollar volume, colored by return % (green gain / red loss); KPIs; sortable raw data table; CSV export (≤ 3 months)
-- **Sector Synopsis** — ranked bar chart for one sector with inline per-stock candlestick on click
-- **Stock Detail** — full per-stock candlestick with toggleable technical overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI, MACD, ATR, OBV); index membership badges; OHLCV CSV export (≤ 3 months)
+- **Heatmap** — treemap tiles sized by dollar volume (or equal-weight / magnitude), colored by return %; top movers strip; collapsible Options panel (sector filter, clip ±%, palette, center-zero toggle, view toggle)
+- **Sector Synopsis** — sector breadth bar chart (click to drill in); ranked per-stock bar chart; auto-selects the top-performing sector on load
+- **Stock Detail** — full per-stock candlestick with toggleable overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI, MACD, ATR, OBV); index membership badges; Compare mode for normalized multi-symbol performance comparison (up to 5 symbols); defaults to AAPL
 - **Index Overlap** — cross-membership breakdown showing how symbols are distributed across S&P 500, NASDAQ-100, and Dow 30 (exclusive / shared / all three); expandable per-bucket symbol tables
 
 Sidebar controls:
 - Index selector: S&P 500 | NASDAQ-100 | Dow 30 | All
 - Date range: preset buttons (3M, 6M, 1Y, 2Y, YTD) or custom date pickers
-- Color clip slider for heatmap scale
-- In-memory LRU cache stats + clear button
+- Tile sizing: Dollar volume | Equal weight | Magnitude
+- In-memory LRU cache stats
+
+UI preferences (palette, index, tile sizing, default date preset, indicator selection) are persisted to `~/.marketatlas/prefs.json` and restored across browser sessions.
 
 ---
 
@@ -236,9 +238,11 @@ Market Atlas/
 │   │   ├── data.py                     # DB queries + LRU caches
 │   │   ├── charts.py                   # Plotly figure builders
 │   │   ├── indicators.py               # SMA, EMA, Bollinger, RSI, MACD, ATR, OBV
+│   │   ├── prefs.py                    # ~/.marketatlas/prefs.json persistence
 │   │   ├── heatmap.py                  # Heatmap tab
 │   │   ├── sector_synopsis.py          # Sector Synopsis tab
-│   │   └── stock_detail.py             # Stock Detail tab
+│   │   ├── stock_detail.py             # Stock Detail tab
+│   │   └── index_overlap.py            # Index Overlap tab
 │   ├── backfill/
 │   │   └── backfill_10y.py
 │   ├── main.py                         # Daily update orchestrator
