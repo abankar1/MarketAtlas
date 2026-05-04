@@ -222,6 +222,96 @@ def main() -> None:
             width: auto !important;
           }
 
+          /* Heatmap Options expander: keep the 3 controls (View / Sectors /
+             Palette) on one line at mobile width. Labels are short enough
+             ("Map" / "Table", "Finviz", etc.) to fit in ~33% slots. */
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            gap: 0.4rem !important;
+          }
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
+            min-width: 0 !important;
+            margin-bottom: 0 !important;
+          }
+          /* Stop the radio labels from wrapping letter-by-letter in narrow columns. */
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"] {
+            white-space: nowrap;
+          }
+
+          /* Mobile-only label shortening for the Heatmap Options row.
+             Python keeps the long labels (Treemap / Ranked Table / All sectors);
+             we hide the original text and inject the short form via ::before so
+             desktop sees the full names and mobile sees the compact ones. */
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"]:nth-of-type(1) p {
+            font-size: 0;
+          }
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"]:nth-of-type(1) p::before {
+            content: "Map";
+            font-size: 0.875rem;
+          }
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"]:nth-of-type(2) p {
+            font-size: 0;
+          }
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"]:nth-of-type(2) p::before {
+            content: "Table";
+            font-size: 0.875rem;
+          }
+          /* Palette selectbox: shorten the selected value's display text per
+             option. The displayed div has a `value` attribute carrying the
+             literal selected option, so we can match each long label and
+             inject the short version via ::before. RdYlGn is already short. */
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
+            div[value="Finviz-style (default)"],
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
+            div[value="RdBu (colorblind-safe)"],
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
+            div[value="Viridis (sequential)"] {
+            font-size: 0;
+          }
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
+            div[value="Finviz-style (default)"]::before {
+            content: "Finviz";
+            font-size: 0.875rem;
+          }
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
+            div[value="RdBu (colorblind-safe)"]::before {
+            content: "RdBu";
+            font-size: 0.875rem;
+          }
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
+            div[value="Viridis (sequential)"]::before {
+            content: "Viridis";
+            font-size: 0.875rem;
+          }
+
+          /* Multiselect placeholder: hide "All sectors" text and show "All".
+             The placeholder text node lives at value-container > inner > 2nd div
+             inside the BaseWeb select wrapper. */
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stMultiSelect"]
+            [data-baseweb="select"] > div:first-child > div:first-child > div:nth-child(2) {
+            font-size: 0;
+          }
+          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stMultiSelect"]
+            [data-baseweb="select"] > div:first-child > div:first-child > div:nth-child(2)::before {
+            content: "All";
+            font-size: 0.875rem;
+          }
+
           /* Sector Synopsis KPI row: 2-column grid.
              flex-basis must subtract the row gap, otherwise two 50% items
              overflow and each ends up on its own line. */

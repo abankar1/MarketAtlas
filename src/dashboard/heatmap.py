@@ -289,8 +289,22 @@ def render_heatmap_tab(
     if "heatmap_clip" not in st.session_state:
         st.session_state["heatmap_clip"] = 50
 
+    # Drop stale palette session value so the selectbox doesn't error if a
+    # user's saved pref refers to a renamed option.
+    if st.session_state.get("color_palette") not in _PALETTE_OPTIONS:
+        st.session_state.pop("color_palette", None)
+    # Same migration for the view toggle: the displayed labels are still
+    # "Treemap"/"Ranked Table" in Python; mobile CSS just swaps the visible text.
+    if st.session_state.get("heatmap_view_toggle") in ("Map", "Table"):
+        st.session_state["heatmap_view_toggle"] = (
+            "Treemap" if st.session_state["heatmap_view_toggle"] == "Map" else "Ranked Table"
+        )
+
     with st.expander("Options", expanded=False):
-        _view_col, _f_col, _pal_col = st.columns([2, 3, 2], gap="large")
+        # Marker so the mobile CSS can collapse the column gap when the
+        # 3 controls wrap to 3 stacked rows on narrow viewports.
+        st.markdown('<div data-options-row="true"></div>', unsafe_allow_html=True)
+        _view_col, _f_col, _pal_col = st.columns([2, 3, 3], gap="large")
 
         with _f_col:
             selected_sectors = st.multiselect(
