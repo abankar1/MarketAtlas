@@ -185,26 +185,36 @@ def main() -> None:
 
         /* ---------- Mobile (≤640px) ---------- */
         @media (max-width: 640px) {
-          /* Compact header — keep the full title in view and tighten its
-             baseline. Streamlit clips ~0.5rem of any h1 in the iframe view
-             unless we also zero out its top margin. */
+          /* Pin the title into the header area on mobile so it sits right
+             next to the >> sidebar-toggle button instead of taking its own
+             line below the header. position: fixed pulls it out of normal
+             flow, freeing the caption to slide up. */
           h1 {
-            font-size: 1.45rem !important;
-            line-height: 1.2 !important;
-            margin-top: 0 !important;
-            margin-bottom: 0.15rem !important;
-            padding-top: 0 !important;
+            position: fixed !important;
+            /* Vertical-center on the >> sidebar-toggle button (whose center
+               sits ~30px from the top of the 60px-tall Streamlit header). */
+            top: 1.05rem !important;
+            left: 3rem !important;
+            font-size: 1.15rem !important;
+            line-height: 1.4 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            z-index: 999990;
           }
           .block-container {
-            /* Clear Streamlit's 60px-tall fixed header on mobile so the
-               title isn't hidden underneath it. */
+            /* Tuned so the gap between the header bottom and the caption
+               matches the structural ~16px gap between the caption and the
+               tabs row below — caption visually centred between them. */
             padding-top: 3.75rem !important;
             padding-bottom: 0.25rem !important;
           }
-          /* Caption right under the title — zero top margin so it sits closer. */
-          [data-testid="stCaptionContainer"] {
+          /* Caption text — zero margins so the wrapping container alone
+             controls the spacing (set via padding-top + flex gap above). */
+          .block-container > [data-testid="stVerticalBlock"]
+            > [data-testid="stElementContainer"]
+            [data-testid="stMarkdownContainer"] p {
             margin-top: 0 !important;
-            margin-bottom: 0.25rem !important;
+            margin-bottom: 0 !important;
           }
           /* Tighten the gap between every vertical block on mobile so the
              whole page feels more compact. Default is ~1rem between siblings. */
