@@ -19,7 +19,7 @@ Market Atlas is a data-driven platform that:
 - **Python 3.11+**
 - **PostgreSQL 14+** with the **TimescaleDB extension** installed
   - macOS: `brew install timescaledb` then follow post-install steps
-  - See `TimescaleDbCheatsheet.txt` for hypertable setup, compression, and retention policies
+  - See [docs/timescaledb-cheatsheet.md](docs/timescaledb-cheatsheet.md) for hypertable setup, compression, and retention policies
 - A [Marketstack](https://marketstack.com) API access key (`marketdata_token`)
 - *(Optional)* A [Marketaux](https://www.marketaux.com) API key (`marketaux_token`) — enables the News tab (free tier: 100 requests/day)
 - *(Optional)* An [Anthropic](https://console.anthropic.com) API key (`anthropic_api_key`) — used for AI-based GICS sector classification of new stocks
@@ -75,7 +75,7 @@ Edit `src/config/configuration.json`:
 ## Database Setup
 
 Ensure TimescaleDB is running and the required tables exist before running any importers.
-See `TimescaleDbCheatsheet.txt` for the full SQL to:
+See [docs/timescaledb-cheatsheet.md](docs/timescaledb-cheatsheet.md) for the full SQL to:
 - Create `assets`, `daily_bars`, `sp500_constituents`, `nasdaq100_constituents`, `dow30_constituents`
 - Convert `daily_bars` to a hypertable
 - Set retention/compression policies
@@ -254,11 +254,11 @@ Market Atlas/
 │   ├── main.py                         # Daily update orchestrator
 │   └── sync_constituents.py            # Constituent sync entry point
 ├── docs/
-│   └── user-guide.md                   # Dashboard user guide
-├── scripts/
-│   └── backup_db.py                    # pg_dump + snapshot utility
-├── TimescaleDbCheatsheet.txt           # Database setup SQL + reference
+│   ├── user-guide.md                   # Dashboard user guide
+│   └── timescaledb-cheatsheet.md       # Database setup SQL + reference
 └── readme.md
+# (scripts/ is gitignored — operator-only utilities like pg_dump backups
+# and DB setup SQL stay local and aren't shipped with the repo.)
 ```
 
 ---

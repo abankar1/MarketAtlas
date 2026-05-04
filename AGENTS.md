@@ -50,12 +50,12 @@ repo root/
 ├── data/
 │   └── gics_sectors.json               # static {symbol: gics_sector} map (532 symbols)
 ├── docs/
-│   └── user-guide.md                   # end-user guide for the dashboard
-├── scripts/
-│   └── backup_db.py                    # pg_dump snapshot utility
+│   ├── user-guide.md                   # end-user guide for the dashboard
+│   └── timescaledb-cheatsheet.md       # TimescaleDB SQL reference
 ├── AGENTS.md                           # this file
-├── readme.md                           # human-facing setup guide
-└── TimescaleDbCheatsheet.txt           # TimescaleDB SQL reference
+└── readme.md                           # human-facing setup guide
+# scripts/ is gitignored — operator-only utilities (pg_dump backups, DB
+# migration SQL with credentials) live there but are not part of the repo.
 ```
 
 ---

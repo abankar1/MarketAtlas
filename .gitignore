@@ -21,6 +21,10 @@ env/
 # Credentials — NEVER commit the real config
 src/config/configuration.json
 
+# Operator scripts — DB setup SQL with passwords, ad-hoc migrations, backup
+# helpers. Kept local only; not part of the published codebase.
+scripts/
+
 # Large test / sample data files (not needed in repo)
 data/AAPL.json
 ibmOutput.json
