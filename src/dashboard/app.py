@@ -185,9 +185,38 @@ def main() -> None:
 
         /* ---------- Mobile (≤640px) ---------- */
         @media (max-width: 640px) {
-          /* Compact header */
-          h1 { font-size: 1.6rem !important; margin-bottom: 0.25rem !important; }
-          .block-container { padding-top: 0.5rem !important; }
+          /* Compact header — keep the full title in view and tighten its
+             baseline. Streamlit clips ~0.5rem of any h1 in the iframe view
+             unless we also zero out its top margin. */
+          h1 {
+            font-size: 1.45rem !important;
+            line-height: 1.2 !important;
+            margin-top: 0 !important;
+            margin-bottom: 0.15rem !important;
+            padding-top: 0 !important;
+          }
+          .block-container {
+            /* Clear Streamlit's 60px-tall fixed header on mobile so the
+               title isn't hidden underneath it. */
+            padding-top: 3.75rem !important;
+            padding-bottom: 0.25rem !important;
+          }
+          /* Caption right under the title — zero top margin so it sits closer. */
+          [data-testid="stCaptionContainer"] {
+            margin-top: 0 !important;
+            margin-bottom: 0.25rem !important;
+          }
+          /* Tighten the gap between every vertical block on mobile so the
+             whole page feels more compact. Default is ~1rem between siblings. */
+          [data-testid="stVerticalBlock"] {
+            gap: 0.5rem !important;
+          }
+          /* Movers strip captions ("Top 5 ▲" / "Top 5 ▼") were taking a full
+             line-height of margin above and below. */
+          [data-testid="stCaptionContainer"] p {
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+          }
 
           /* Tab nav: keep all 5 buttons in one horizontally-scrollable row.
              The marker div lives inside an stElementContainer; the columns row
