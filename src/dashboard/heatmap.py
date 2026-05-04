@@ -232,6 +232,9 @@ def _render_movers_strip(
 
     def _row(label: str, subset: pd.DataFrame) -> None:
         st.caption(label)
+        # Marker so the mobile CSS can keep all 5 cards in one
+        # horizontally-scrollable row instead of stacking them.
+        st.markdown('<div data-mover-strip="true"></div>', unsafe_allow_html=True)
         cols = st.columns(n)
         for col, (_, row) in zip(cols, subset.iterrows()):
             pct = row["return_pct"]

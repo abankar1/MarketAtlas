@@ -93,32 +93,31 @@ def _render_breadth_bar(breadth: pd.DataFrame) -> None:
         orientation="h",
         marker_color=bar_colors,
         text=[f"{b:.0f}%" for b in breadth["breadth_pct"]],
-        textposition="outside",
+        textposition="auto",
         hovertext=hover_texts,
         hoverinfo="text",
     ))
     fig.add_vline(
         x=50,
-        line_color="rgba(255,255,255,0.3)",
+        line_color="rgba(128,128,128,0.5)",
         line_width=1,
         line_dash="dot",
         annotation_text="50%",
         annotation_position="top",
-        annotation_font_color="rgba(255,255,255,0.4)",
+        annotation_font_color="rgba(128,128,128,0.8)",
     )
     fig.update_layout(
         height=max(220, len(breadth) * 28),
-        margin=dict(t=10, l=10, r=60, b=30),
+        margin=dict(t=10, l=10, r=20, b=30),
         xaxis=dict(
-            range=[0, 115],
             title="% of stocks up",
-            gridcolor="rgba(255,255,255,0.1)",
+            gridcolor="rgba(128,128,128,0.2)",
             zeroline=False,
+            automargin=True,
         ),
-        yaxis=dict(tickfont=dict(size=11)),
+        yaxis=dict(tickfont=dict(size=11), automargin=True),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        font_color="white",
     )
 
     st.subheader("Sector Breadth")
@@ -174,6 +173,8 @@ def render_sector_synopsis(
     # range_label shown once as caption; removed from individual metric headings
     # to prevent truncation. Column widths weighted by content needs.
     st.caption(f"Period: {range_label}")
+    # Marker so the mobile CSS can collapse this 5-metric row into a 2-column grid.
+    st.markdown('<div data-kpi-row="true"></div>', unsafe_allow_html=True)
     k = st.columns([0.7, 1.6, 1.6, 1.8, 1.7])
     k[0].metric("Stocks", len(sdf))
     k[1].metric("Median return", f"{median_ret:+.2f}%")
@@ -213,7 +214,7 @@ def render_sector_synopsis(
         orientation="h",
         marker_color=bar_colors,
         text=[f"{r:+.2f}%" for r in sdf["return_pct"]],
-        textposition="outside",
+        textposition="auto",
         customdata=sdf.assign(
             _ret=sdf["return_pct"].map(lambda v: f"{v:+.2f}%")
         )[["name", "start_close", "end_close", "dollar_volume", "_ret"]].values,
@@ -226,7 +227,7 @@ def render_sector_synopsis(
         ),
     ))
 
-    fig.add_vline(x=0, line_color="white", line_width=1)
+    fig.add_vline(x=0, line_color="rgba(128,128,128,0.6)", line_width=1)
     fig.add_vline(
         x=avg_ret,
         line_color="yellow",
@@ -239,18 +240,18 @@ def render_sector_synopsis(
 
     fig.update_layout(
         height=max(420, len(sdf) * 26),
-        margin=dict(t=30, l=80, r=80, b=20),
+        margin=dict(t=30, l=10, r=10, b=20),
         xaxis_title="Return %",
-        yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=11), automargin=True),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        font_color="white",
         xaxis=dict(
-            gridcolor="rgba(255,255,255,0.1)",
+            gridcolor="rgba(128,128,128,0.2)",
             zeroline=False,
             tickformat="+.2f",
             hoverformat="+.2f",
             ticksuffix="%",
+            automargin=True,
         ),
     )
 

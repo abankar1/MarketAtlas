@@ -172,11 +172,77 @@ def _seed_prefs_once() -> None:
 def main() -> None:
     st.set_page_config(page_title="Market Atlas", layout="wide")
     st.markdown(
-        "<style>"
-        ".block-container { padding-top: 1rem; padding-bottom: 0.5rem; }"
-        ".stMetric { padding: 0.25rem 0.5rem; }"
-        ".stSidebar .block-container { padding-top: 0.75rem; }"
-        "</style>",
+        """
+        <style>
+        .block-container { padding-top: 1rem; padding-bottom: 0.5rem; }
+        .stMetric { padding: 0.25rem 0.5rem; }
+        .stSidebar .block-container { padding-top: 0.75rem; }
+
+        /* ---------- Mobile (≤640px) ---------- */
+        @media (max-width: 640px) {
+          /* Compact header */
+          h1 { font-size: 1.6rem !important; margin-bottom: 0.25rem !important; }
+          .block-container { padding-top: 0.5rem !important; }
+
+          /* Tab nav: keep all 5 buttons in one horizontally-scrollable row.
+             The marker div lives inside an stElementContainer; the columns row
+             is rendered as the immediately-following stLayoutWrapper. */
+          [data-testid="stElementContainer"]:has(div[data-tab-nav="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            overflow-x: auto;
+            scrollbar-width: none;
+          }
+          [data-testid="stElementContainer"]:has(div[data-tab-nav="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]::-webkit-scrollbar {
+            display: none;
+          }
+          [data-testid="stElementContainer"]:has(div[data-tab-nav="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
+            flex: 0 0 auto !important;
+            min-width: 7rem !important;
+            width: auto !important;
+          }
+
+          /* Heatmap movers strip: single horizontally-scrollable row */
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            overflow-x: auto;
+            scrollbar-width: none;
+          }
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]::-webkit-scrollbar {
+            display: none;
+          }
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
+            flex: 0 0 auto !important;
+            min-width: 5.5rem !important;
+            width: auto !important;
+          }
+
+          /* Sector Synopsis KPI row: 2-column grid.
+             flex-basis must subtract the row gap, otherwise two 50% items
+             overflow and each ends up on its own line. */
+          [data-testid="stElementContainer"]:has(div[data-kpi-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            gap: 0.5rem !important;
+          }
+          [data-testid="stElementContainer"]:has(div[data-kpi-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
+            flex: 0 0 calc(50% - 0.25rem) !important;
+            width: calc(50% - 0.25rem) !important;
+            min-width: 0 !important;
+          }
+          [data-testid="stElementContainer"]:has(div[data-kpi-row="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stMetricValue"] {
+            font-size: 1.1rem !important;
+          }
+        }
+        </style>
+        """,
         unsafe_allow_html=True,
     )
     _seed_prefs_once()
@@ -361,6 +427,10 @@ def main() -> None:
     if "active_tab" not in st.session_state:
         st.session_state["active_tab"] = "Heatmap"
 
+    # Marker div lets the mobile CSS target *only* this columns row and turn
+    # it into a horizontally scrollable strip instead of stacking 5 buttons
+    # vertically on narrow viewports.
+    st.markdown('<div data-tab-nav="true"></div>', unsafe_allow_html=True)
     _tab_cols = st.columns(len(_TABS))
     for _col, _tab_name in zip(_tab_cols, _TABS):
         _col.button(

@@ -89,18 +89,17 @@ def render_index_overlap_tab(db_url: str) -> None:
         orientation="h",
         marker_color=[b["color"] for b in non_empty],
         text=[str(b["count"]) for b in non_empty],
-        textposition="outside",
+        textposition="auto",
         hovertemplate="<b>%{y}</b><br>Symbols: %{x}<extra></extra>",
     ))
     fig.update_layout(
         height=max(300, len(non_empty) * 52),
-        margin=dict(t=20, l=200, r=60, b=20),
+        margin=dict(t=20, l=10, r=20, b=20),
         xaxis_title="Symbol count",
-        yaxis=dict(autorange="reversed", tickfont=dict(size=12)),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=12), automargin=True),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        font_color="white",
-        xaxis=dict(gridcolor="rgba(255,255,255,0.1)", zeroline=False),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", zeroline=False, automargin=True),
     )
     st.plotly_chart(fig, use_container_width=True, theme=None)
 
