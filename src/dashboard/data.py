@@ -9,8 +9,10 @@ fetch_treemap_data(conn, index_key, date_from, date_to)
 fetch_available_date_bounds(db_url, index_key)      cached 60 s
 get_treemap_data_cached(db_url, index_key, ...)     session LRU cache
 get_ohlcv_cached(db_url, symbol, ...)               session LRU cache
+get_news_cached(token, symbol, ...)                 session LRU cache (URL-keyed, 12h TTL)
 _get_session_cache()                                raw OrderedDict (for sidebar stats)
 _get_ohlcv_cache()                                  raw OrderedDict (for cache clear)
+_get_news_cache()                                   raw OrderedDict (for sidebar stats)
 """
 from __future__ import annotations
 
@@ -22,6 +24,18 @@ import psycopg
 import streamlit as st
 
 from src.db.repositories import fetch_ohlcv
+from src.marketdata.news_client import NewsClient, build_request_url
+
+
+# 12-hour TTL applied uniformly to every cache in this module — long enough to
+# stay within Marketaux's 100/day budget across a working day, short enough that
+# a dashboard left open overnight picks up the next daily DB sync on first use.
+CACHE_TTL_SECONDS = 12 * 3600
+
+
+def _ttl_bucket() -> int:
+    """Integer bucket that flips every CACHE_TTL_SECONDS — used as a key suffix."""
+    return int(dt.datetime.now().timestamp() // CACHE_TTL_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -157,14 +171,14 @@ def fetch_treemap_data(
     return df.dropna(subset=["return_pct", "dollar_volume"])
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def fetch_index_overlap(db_url: str) -> pd.DataFrame:
     """
     Return one row per active symbol with boolean index-membership flags.
 
     Columns: symbol, name, sector, in_sp500 (bool), in_nasdaq100 (bool), in_dow30 (bool)
 
-    Cached for 1 hour — constituent membership is stable between daily syncs.
+    Cached for CACHE_TTL_SECONDS — constituent membership is stable between daily syncs.
     Zero new columns are needed; the three constituent tables are left-joined.
     """
     q = """
@@ -191,13 +205,13 @@ def fetch_index_overlap(db_url: str) -> pd.DataFrame:
         return pd.read_sql(q, conn)
 
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
 def fetch_available_date_bounds(
     db_url: str, index_key: str
 ) -> tuple[dt.date | None, dt.date | None]:
     """
     Return (min_date, max_date) of bars available for the selected universe.
-    Result is cached for 60 seconds to keep the UI responsive.
+    Cached for CACHE_TTL_SECONDS.
     """
     universe_sql = build_universe_sql(index_key)
 
@@ -243,7 +257,7 @@ def get_treemap_data_cached(
     Prevents repeated DB queries when the user toggles filters back and forth.
     Set cache_size=0 to disable caching and always hit the DB.
     """
-    key = (db_url, index_key, date_from.isoformat(), date_to.isoformat())
+    key = (db_url, index_key, date_from.isoformat(), date_to.isoformat(), _ttl_bucket())
 
     if "treemap_cache_hits" not in st.session_state:
         st.session_state["treemap_cache_hits"] = 0
@@ -294,7 +308,7 @@ def get_ohlcv_cached(
     cache_size: int = 20,
 ) -> pd.DataFrame:
     """Session-level LRU cache wrapping repositories.fetch_ohlcv."""
-    key = (symbol, date_from.isoformat(), date_to.isoformat())
+    key = (symbol, date_from.isoformat(), date_to.isoformat(), _ttl_bucket())
     cache = _get_ohlcv_cache()
 
     if key in cache:
@@ -310,3 +324,55 @@ def get_ohlcv_cached(
         cache.popitem(last=False)
 
     return df
+
+
+# ---------------------------------------------------------------------------
+# Session-level LRU cache — News headlines
+# ---------------------------------------------------------------------------
+
+def _get_news_cache() -> OrderedDict:
+    """Return (or create) the per-session news LRU cache from session_state."""
+    if "news_cache" not in st.session_state:
+        st.session_state["news_cache"] = OrderedDict()
+    return st.session_state["news_cache"]
+
+
+def get_news_cached(
+    token: str,
+    symbol: str,
+    limit: int = 10,
+    cache_size: int = 20,
+) -> list[dict]:
+    """
+    Session-level LRU cache wrapping NewsClient.fetch_news.
+
+    The cache key is the canonical Marketaux request URL (excluding the secret
+    api_token), suffixed with a 12-hour TTL bucket. On cache hit the stored
+    response is returned with no network call. Critical for staying inside the
+    free-tier 100 req/day budget.
+
+    Raises NewsClientError on API failures (caller renders a warning).
+    """
+    if "news_cache_hits" not in st.session_state:
+        st.session_state["news_cache_hits"] = 0
+    if "news_cache_misses" not in st.session_state:
+        st.session_state["news_cache_misses"] = 0
+
+    key = (build_request_url(symbol, limit), _ttl_bucket())
+    cache = _get_news_cache()
+
+    if key in cache:
+        st.session_state["news_cache_hits"] += 1
+        cache.move_to_end(key)
+        return cache[key]
+
+    st.session_state["news_cache_misses"] += 1
+    client = NewsClient(token=token)
+    articles = client.fetch_news(symbol, limit=limit)
+
+    cache[key] = articles
+    cache.move_to_end(key)
+    while len(cache) > cache_size:
+        cache.popitem(last=False)
+
+    return articles

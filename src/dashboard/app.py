@@ -30,6 +30,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.dashboard.data import (  # noqa: E402
+    _get_news_cache,
     _get_ohlcv_cache,
     _get_session_cache,
     fetch_available_date_bounds,
@@ -37,6 +38,7 @@ from src.dashboard.data import (  # noqa: E402
 )
 from src.dashboard.heatmap import render_heatmap_tab  # noqa: E402
 from src.dashboard.index_overlap import render_index_overlap_tab  # noqa: E402
+from src.dashboard.news import render_news_tab  # noqa: E402
 from src.dashboard.prefs import load_prefs, save_prefs  # noqa: E402
 from src.dashboard.sector_synopsis import render_sector_synopsis_tab  # noqa: E402
 from src.dashboard.stock_detail import render_stock_detail  # noqa: E402
@@ -184,6 +186,7 @@ def main() -> None:
 
     cfg = load_config()
     db_url = (cfg.get("db_url") or "").strip()
+    marketaux_token = (cfg.get("marketaux_token") or "").strip()
 
     if not db_url:
         st.error(
@@ -321,11 +324,17 @@ def main() -> None:
     _tm_misses = st.session_state.get("treemap_cache_misses", 0)
     _tm_slots  = len(_get_session_cache())
     _ov_slots  = len(_get_ohlcv_cache())
+    _nw_hits   = st.session_state.get("news_cache_hits",   0)
+    _nw_misses = st.session_state.get("news_cache_misses", 0)
+    _nw_slots  = len(_get_news_cache())
     st.sidebar.caption(
         f"Treemap: {_tm_hits} hits, {_tm_misses} misses "
         f"· {_tm_slots} of {cache_size} slots used"
     )
     st.sidebar.caption(f"OHLCV: {_ov_slots} series cached")
+    st.sidebar.caption(
+        f"News: {_nw_hits} hits, {_nw_misses} misses · {_nw_slots} symbols cached"
+    )
 
     # -----------------------------------------------------------------------
     # Data fetch (shared across all views)
@@ -348,7 +357,7 @@ def main() -> None:
     # Session-state buttons replace st.tabs, which resets to tab 0 on every
     # full page rerun in Streamlit 1.53 (key= parameter not supported).
     # -----------------------------------------------------------------------
-    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "Index Overlap"]
+    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap"]
     if "active_tab" not in st.session_state:
         st.session_state["active_tab"] = "Heatmap"
 
@@ -376,6 +385,9 @@ def main() -> None:
 
     elif _active_tab == "Stock Detail":
         render_stock_detail(df, db_url, date_from, date_to)
+
+    elif _active_tab == "News":
+        render_news_tab(df, marketaux_token)
 
     elif _active_tab == "Index Overlap":
         render_index_overlap_tab(db_url)

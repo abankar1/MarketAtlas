@@ -14,6 +14,7 @@ Optional fields:
     days                Days of history to fetch on incremental updates (default 1000)
     api_sleep_seconds   Delay between Marketstack API calls (default 0.2)
     anthropic_api_key   Anthropic API key for AI sector classification
+    marketaux_token     Marketaux API key for the per-symbol news feed
 
 Usage:
     from src.config.settings import load_settings
@@ -37,6 +38,7 @@ class Settings:
     days: int
     api_sleep_seconds: float
     anthropic_api_key: str = ""  # optional — used for AI sector classification
+    marketaux_token: str = ""    # optional — used for News tab headlines
 
 
 def _load_from_file() -> dict:
@@ -63,6 +65,7 @@ def load_settings() -> Settings:
             days=int(cfg.get("days", 1000)),
             api_sleep_seconds=float(cfg.get("api_sleep_seconds", 0.2)),
             anthropic_api_key=cfg.get("anthropic_api_key", ""),
+            marketaux_token=cfg.get("marketaux_token", ""),
         )
     except KeyError as e:
         raise RuntimeError(f"Missing required config key: {e}") from e
