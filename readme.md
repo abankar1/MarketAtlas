@@ -8,7 +8,7 @@ Market Atlas is a data-driven platform that:
 
 - Ingests daily OHLCV stock data for S&P 500, NASDAQ-100, and Dow 30
 - Stores it in PostgreSQL with the TimescaleDB extension (time-series optimized)
-- Provides an interactive Streamlit dashboard — treemap heatmap, sector breadth, per-stock candlestick charts with technical indicators, and index overlap analysis
+- Provides an interactive Streamlit dashboard — treemap heatmap, sector breadth, per-stock candlestick charts with technical indicators, per-symbol news with sentiment, and index overlap analysis
 - Auto-syncs index constituents monthly from [yfiua/index-constituents](https://github.com/yfiua/index-constituents)
 - Supports 10-year historical backfill and incremental daily updates
 
@@ -21,6 +21,7 @@ Market Atlas is a data-driven platform that:
   - macOS: `brew install timescaledb` then follow post-install steps
   - See `TimescaleDbCheatsheet.txt` for hypertable setup, compression, and retention policies
 - A [Marketstack](https://marketstack.com) API access key (`marketdata_token`)
+- *(Optional)* A [Marketaux](https://www.marketaux.com) API key (`marketaux_token`) — enables the News tab (free tier: 100 requests/day)
 - *(Optional)* An [Anthropic](https://console.anthropic.com) API key (`anthropic_api_key`) — used for AI-based GICS sector classification of new stocks
 
 ---
@@ -62,7 +63,8 @@ Edit `src/config/configuration.json`:
   "marketdata_token": "YOUR_MARKETSTACK_ACCESS_KEY",
   "days": 1000,
   "api_sleep_seconds": 0.2,
-  "anthropic_api_key": "YOUR_ANTHROPIC_API_KEY (optional)"
+  "anthropic_api_key": "YOUR_ANTHROPIC_API_KEY (optional)",
+  "marketaux_token": "YOUR_MARKETAUX_API_KEY (optional — enables News tab)"
 }
 ```
 
@@ -138,20 +140,22 @@ source .venv/bin/activate
 streamlit run src/dashboard/app.py
 ```
 
-Four tabs, all driven by the same sidebar filters:
+Five tabs, all driven by the same sidebar filters:
 
-- **Heatmap** — treemap tiles sized by dollar volume (or equal-weight / magnitude), colored by return %; top movers strip; collapsible Options panel (sector filter, clip ±%, palette, center-zero toggle, view toggle)
+- **Heatmap** — treemap tiles sized by dollar volume, colored by **percentile rank** of return % within the visible universe (Worst / Median / Best); collapsible Options panel (View toggle, sector filter, palette); top movers strip; sector parents show dollar-volume-weighted return + avg start/end close on hover
 - **Sector Synopsis** — sector breadth bar chart (click to drill in); ranked per-stock bar chart; auto-selects the top-performing sector on load
 - **Stock Detail** — full per-stock candlestick with toggleable overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI, MACD, ATR, OBV); index membership badges; Compare mode for normalized multi-symbol performance comparison (up to 5 symbols); defaults to AAPL
+- **News** — recent per-symbol headlines from [Marketaux](https://www.marketaux.com) with title, snippet, source, relative timestamp, and sentiment pill (Positive / Neutral / Negative). Symbol selection is shared with Stock Detail. Requires `marketaux_token` in config; otherwise the tab shows a setup notice.
 - **Index Overlap** — cross-membership breakdown showing how symbols are distributed across S&P 500, NASDAQ-100, and Dow 30 (exclusive / shared / all three); expandable per-bucket symbol tables
 
 Sidebar controls:
 - Index selector: S&P 500 | NASDAQ-100 | Dow 30 | All
 - Date range: preset buttons (3M, 6M, 1Y, 2Y, YTD) or custom date pickers
-- Tile sizing: Dollar volume | Equal weight | Magnitude
-- In-memory LRU cache stats
+- Cache stats: treemap, OHLCV, and news caches (all session-level with a 12-hour TTL)
 
-UI preferences (palette, index, tile sizing, default date preset, indicator selection) are persisted to `~/.marketatlas/prefs.json` and restored across browser sessions.
+Color palette options (Heatmap Options panel): **Finviz-style** (default — dark red → grey → dark green), RdYlGn, RdBu (colorblind-safe), Viridis (sequential).
+
+UI preferences (palette, index, default date preset, indicator selection) are persisted to `~/.marketatlas/prefs.json` and restored across browser sessions.
 
 ---
 
@@ -228,7 +232,8 @@ Market Atlas/
 │   │   ├── connection.py
 │   │   └── repositories.py
 │   ├── marketdata/
-│   │   └── client.py                   # Marketstack API client
+│   │   ├── client.py                   # Marketstack API client (OHLCV)
+│   │   └── news_client.py              # Marketaux API client (news + sentiment)
 │   ├── services/
 │   │   ├── constituent_sync.py         # yfiua index membership sync
 │   │   ├── daily_bar_importer.py       # incremental OHLCV importer
@@ -242,6 +247,7 @@ Market Atlas/
 │   │   ├── heatmap.py                  # Heatmap tab
 │   │   ├── sector_synopsis.py          # Sector Synopsis tab
 │   │   ├── stock_detail.py             # Stock Detail tab
+│   │   ├── news.py                     # News tab (Marketaux headlines)
 │   │   └── index_overlap.py            # Index Overlap tab
 │   ├── backfill/
 │   │   └── backfill_10y.py

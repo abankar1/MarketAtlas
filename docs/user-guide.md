@@ -13,6 +13,7 @@ it through an interactive Streamlit dashboard.
 - Drill into a specific sector to compare all its stocks side by side
 - Pull up a candlestick chart for any individual stock with technical overlays
 - Compare up to 5 stocks on a normalised performance chart
+- Read recent per-symbol news headlines with sentiment scoring
 - Keep your constituent lists automatically up to date as stocks are added or removed from indices
 - Run a daily update that fetches the latest prices for everything in your database
 
@@ -41,22 +42,16 @@ Pick a preset time window: Past 3 months (default), Past 6 months, Past 1 year, 
 **Start date / End date**
 The date pickers are bounded to the earliest and latest bar dates actually in your database for the selected universe.
 
-**Size tiles by**
-Controls how treemap tile area is calculated:
-- *Dollar volume* (default) — tile area ∝ end price × shares traded; larger companies dominate visually
-- *Equal weight* — every tile the same size; colour is the only signal
-- *Magnitude* — tile area ∝ |return %|; highlights the biggest movers regardless of liquidity
-
 **Cache**
-Shows how many query results are cached in the current session (hits, misses, slots used).
+Shows how many query results are cached in the current session (hits, misses, slots used) for the treemap, OHLCV, and news caches. All three use a shared 12-hour TTL — long enough to keep API/DB usage low (Marketaux free tier is 100 requests/day), short enough that a dashboard left open overnight refreshes data on first use.
 
-UI preferences (index, palette, tile sizing, date preset, indicator selection) are automatically saved to `~/.marketatlas/prefs.json` and restored the next time you open the dashboard.
+UI preferences (index, palette, date preset, indicator selection) are automatically saved to `~/.marketatlas/prefs.json` and restored the next time you open the dashboard.
 
 ---
 
 ### Heatmap Tab
 
-The main view. Every stock in the selected universe appears as a rectangle colored by its return % over the selected date range.
+The main view. Every stock in the selected universe appears as a rectangle sized by its dollar volume. Tiles are colored by **percentile rank** of return % within the visible universe — 0 = worst performer, 100 = best — so a single outlier (e.g. a +300% mover) no longer washes everything else into the same boundary colour. The colorbar is labelled **Worst / Median / Best** rather than raw percent values.
 
 **Top movers strip**
 Above the treemap, a compact strip shows the top 5 gainers (▲) and top 5 losers (▼) for a quick read on the extremes.
@@ -65,12 +60,10 @@ Above the treemap, a compact strip shows the top 5 gainers (▲) and top 5 loser
 Click the **Options** arrow to expand display controls:
 - *View* — switch between Treemap and Ranked Table
 - *Sectors* — filter to one or more GICS sectors (empty = all sectors)
-- *Clip ±%* — sets the color scale range (default ±10%). Returns beyond the clip are clamped to the boundary colour so a single outlier doesn't wash out everything else. The current value shows as ±N% on the slider.
-- *Color palette* — RdYlGn (default), RdBu (colorblind-safe), or Viridis (sequential)
-- *Center on 0%* — ON: neutral colour at 0% (green = gain, red = loss). OFF: neutral colour at the period median, highlighting relative out/under-performers on broadly trending days.
+- *Color palette* — Finviz-style (default — dark red → grey → dark green, no yellow), RdYlGn, RdBu (colorblind-safe), or Viridis (sequential)
 
 **Treemap**
-Rectangles are grouped by GICS sector. Hover for return %, start/end close, dollar volume, and index membership.
+Rectangles are grouped by GICS sector. Hover a stock for return %, percentile, start/end close, and dollar volume. Hover a sector parent for the dollar-volume-weighted return and average start/end close, plus the stock count and total dollar volume for the sector.
 
 **Ranked Table**
 Sortable table with all symbols ranked by return %, with background-coloured return cells matching the treemap palette, and a percentile bar column.
@@ -133,6 +126,29 @@ Switch to Compare using the mode toggle at the top. A single multiselect replace
 
 ---
 
+### News Tab
+
+Recent headlines for any single ticker, fetched from [Marketaux](https://www.marketaux.com).
+
+**Symbol selector**
+Pick any ticker in the current universe. The selection is shared with the Stock Detail tab — if you pick AAPL on Stock Detail and switch to News, AAPL is preselected (and vice versa). On a fresh session it defaults to AAPL.
+
+**Headline cards**
+Each card shows:
+- Article title (clickable, opens in a new tab)
+- Sentiment pill — **Positive** (green), **Negative** (red), or **Neutral** (grey), driven by Marketaux's per-entity sentiment score
+- A short description snippet (truncated at a word boundary)
+- Source · relative timestamp ("3h ago", "2d ago", etc.)
+
+Up to 10 cards per symbol.
+
+**Configuration**
+The News tab needs a free [Marketaux](https://www.marketaux.com) API key set as `marketaux_token` in `src/config/configuration.json`. Without it, the tab shows a one-line setup notice and the rest of the dashboard keeps working.
+
+Marketaux's free tier is 100 requests/day. Headlines are cached per-symbol for 12 hours, so revisiting the same ticker doesn't burn quota.
+
+---
+
 ### Index Overlap Tab
 
 Shows how symbols are distributed across S&P 500, NASDAQ-100, and Dow 30.
@@ -190,4 +206,4 @@ The backfill is safe to re-run — it only fetches what is missing.
 
 **Stocks appearing in multiple indices** (e.g. Apple is in both S&P 500 and NASDAQ-100) appear once in "All" mode and are counted in their respective bucket in the Index Overlap tab.
 
-**Cache is per browser session.** Opening a second browser tab starts a fresh cache.
+**Cache is per browser session.** Opening a second browser tab starts a fresh cache. All caches (treemap, OHLCV, news) refresh on a 12-hour TTL — the bucket is keyed off wall-clock time, so an entry stays warm until the next 12-hour boundary.
