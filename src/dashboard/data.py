@@ -9,10 +9,10 @@ fetch_treemap_data(conn, index_key, date_from, date_to)
 fetch_available_date_bounds(db_url, index_key)      cached 60 s
 get_treemap_data_cached(db_url, index_key, ...)     session LRU cache
 get_ohlcv_cached(db_url, symbol, ...)               session LRU cache
-get_news_cached(token, symbol, ...)                 session LRU cache (URL-keyed, 12h TTL)
+get_news_cached(token, symbol, ...)                 process-wide @st.cache_data (12h TTL)
+get_news_api_call_count()                           int — actual Marketaux calls since server start
 _get_session_cache()                                raw OrderedDict (for sidebar stats)
 _get_ohlcv_cache()                                  raw OrderedDict (for cache clear)
-_get_news_cache()                                   raw OrderedDict (for sidebar stats)
 """
 from __future__ import annotations
 
@@ -327,52 +327,48 @@ def get_ohlcv_cached(
 
 
 # ---------------------------------------------------------------------------
-# Session-level LRU cache — News headlines
+# Process-wide cached news fetch — survives page refreshes / new sessions
+# within the same Streamlit server process. Critical for staying inside
+# Marketaux's 100 req/day budget when the user reloads the dashboard.
+#
+# Uses @st.cache_data instead of session_state so the cache is shared
+# across all browser sessions of the same server.
 # ---------------------------------------------------------------------------
 
-def _get_news_cache() -> OrderedDict:
-    """Return (or create) the per-session news LRU cache from session_state."""
-    if "news_cache" not in st.session_state:
-        st.session_state["news_cache"] = OrderedDict()
-    return st.session_state["news_cache"]
+# Track actual Marketaux API calls (cache misses) since process start so the
+# sidebar can show a useful counter — @st.cache_data doesn't expose hit/miss.
+_NEWS_API_CALLS = 0
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False, max_entries=50)
+def _fetch_news_data(token: str, symbol: str, limit: int) -> list[dict]:
+    """
+    Process-wide cached news fetch. Streamlit hashes the args and caches the
+    return value for CACHE_TTL_SECONDS — every call within that window is
+    served from memory without hitting Marketaux. Survives page refreshes.
+    """
+    global _NEWS_API_CALLS
+    _NEWS_API_CALLS += 1
+    client = NewsClient(token=token)
+    return client.fetch_news(symbol, limit=limit)
 
 
 def get_news_cached(
     token: str,
     symbol: str,
     limit: int = 10,
-    cache_size: int = 20,
+    cache_size: int = 20,  # noqa: ARG001 — kept for API compat
 ) -> list[dict]:
     """
-    Session-level LRU cache wrapping NewsClient.fetch_news.
-
-    The cache key is the canonical Marketaux request URL (excluding the secret
-    api_token), suffixed with a 12-hour TTL bucket. On cache hit the stored
-    response is returned with no network call. Critical for staying inside the
-    free-tier 100 req/day budget.
+    Fetch news with process-wide caching (12h TTL, 50-entry LRU).
+    Survives page refreshes — repeated reloads of the same symbol do not
+    burn Marketaux quota.
 
     Raises NewsClientError on API failures (caller renders a warning).
     """
-    if "news_cache_hits" not in st.session_state:
-        st.session_state["news_cache_hits"] = 0
-    if "news_cache_misses" not in st.session_state:
-        st.session_state["news_cache_misses"] = 0
+    return _fetch_news_data(token, symbol, limit)
 
-    key = (build_request_url(symbol, limit), _ttl_bucket())
-    cache = _get_news_cache()
 
-    if key in cache:
-        st.session_state["news_cache_hits"] += 1
-        cache.move_to_end(key)
-        return cache[key]
-
-    st.session_state["news_cache_misses"] += 1
-    client = NewsClient(token=token)
-    articles = client.fetch_news(symbol, limit=limit)
-
-    cache[key] = articles
-    cache.move_to_end(key)
-    while len(cache) > cache_size:
-        cache.popitem(last=False)
-
-    return articles
+def get_news_api_call_count() -> int:
+    """Total Marketaux API calls made since the Streamlit server started."""
+    return _NEWS_API_CALLS

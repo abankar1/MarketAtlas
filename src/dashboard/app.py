@@ -30,10 +30,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.dashboard.data import (  # noqa: E402
-    _get_news_cache,
     _get_ohlcv_cache,
     _get_session_cache,
     fetch_available_date_bounds,
+    get_news_api_call_count,
     get_treemap_data_cached,
 )
 from src.dashboard.heatmap import render_heatmap_tab  # noqa: E402
@@ -518,16 +518,14 @@ def main() -> None:
     _tm_misses = st.session_state.get("treemap_cache_misses", 0)
     _tm_slots  = len(_get_session_cache())
     _ov_slots  = len(_get_ohlcv_cache())
-    _nw_hits   = st.session_state.get("news_cache_hits",   0)
-    _nw_misses = st.session_state.get("news_cache_misses", 0)
-    _nw_slots  = len(_get_news_cache())
+    _nw_calls  = get_news_api_call_count()
     st.sidebar.caption(
         f"Treemap: {_tm_hits} hits, {_tm_misses} misses "
         f"· {_tm_slots} of {cache_size} slots used"
     )
     st.sidebar.caption(f"OHLCV: {_ov_slots} series cached")
     st.sidebar.caption(
-        f"News: {_nw_hits} hits, {_nw_misses} misses · {_nw_slots} symbols cached"
+        f"News: {_nw_calls} Marketaux calls since server start · 12h TTL"
     )
 
     # -----------------------------------------------------------------------
