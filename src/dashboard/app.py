@@ -330,6 +330,44 @@ def main() -> None:
             + [data-testid="stLayoutWrapper"] [data-testid="stMetricValue"] {
             font-size: 1.1rem !important;
           }
+
+          /* Index Overlap headline: 4 metrics on one line at any width. */
+          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            gap: 0.3rem !important;
+          }
+          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
+            flex: 1 1 0 !important;
+            width: auto !important;
+            min-width: 0 !important;
+          }
+          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stMetricLabel"] {
+            font-size: 0.7rem !important;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          /* First metric ("Unique symbols") wouldn't fit on mobile — swap to
+             "Unique" via the same hide-and-inject pseudo-element pattern.
+             The label text is rendered inside a nested <p>. */
+          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]
+            > div:nth-child(1) [data-testid="stMetricLabel"] p {
+            font-size: 0;
+          }
+          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]
+            > div:nth-child(1) [data-testid="stMetricLabel"] p::before {
+            content: "Unique";
+            font-size: 0.7rem;
+          }
+          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stMetricValue"] {
+            font-size: 1.1rem !important;
+          }
         }
         </style>
         """,
