@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as st_components
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -120,6 +121,11 @@ def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None
 def _on_tab_click(tab_name: str) -> None:
     """on_click callback for custom tab navigation buttons."""
     st.session_state["active_tab"] = tab_name
+    # Track that the user has interacted with the tab strip at least once.
+    # The mobile tab-reveal animation injects only on the rerun *after* the
+    # first such click, by which time Streamlit's initial reconciliation has
+    # finished and the columns DOM is stable enough to animate.
+    st.session_state["tab_clicked_once"] = True
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +197,20 @@ def main() -> None:
             flex-wrap: nowrap !important;
             overflow-x: auto;
             scrollbar-width: none;
+          }
+          /* Mount-time hint: translate every tab column left in unison so the
+             rightmost tabs (News + Index Overlap) start visible in the strip's
+             viewport, then ease back to 0 so the row settles at its normal
+             left-aligned position. Pure CSS — survives Streamlit re-renders. */
+          /* Mobile tab-reveal: when the body carries the .tab-hint-trigger
+             class (set after the user's first tab click), every tab column
+             plays a slide-in from the left so the rightmost tabs (News +
+             Index Overlap) are visible during the delay, then the row eases
+             back to its normal left-aligned resting position. */
+          body.tab-hint-trigger
+            [data-testid="stElementContainer"]:has(div[data-tab-nav="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
+            animation: tab-reveal 1.6s cubic-bezier(0.22, 0.61, 0.36, 1) 0.6s backwards;
           }
           [data-testid="stElementContainer"]:has(div[data-tab-nav="true"])
             + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]::-webkit-scrollbar {
@@ -367,6 +387,12 @@ def main() -> None:
             + [data-testid="stLayoutWrapper"] [data-testid="stMetricValue"] {
             font-size: 1.1rem !important;
           }
+        }
+
+        /* Tab-reveal keyframes — outside @media so the engine registers them. */
+        @keyframes tab-reveal {
+          0%   { transform: translateX(-260px); }
+          100% { transform: translateX(0); }
         }
         </style>
         """,
@@ -561,6 +587,24 @@ def main() -> None:
             use_container_width=True,
             on_click=_on_tab_click,
             kwargs={"tab_name": _tab_name},
+        )
+
+    # Mobile tab-reveal hint: a CSS class is added to <body> on the rerun
+    # *after* the first tab click. The mobile-only CSS rule applies the
+    # tab-reveal keyframe animation only when that class is present, so the
+    # animation plays once after the user starts interacting (by which time
+    # Streamlit's initial reconciliation has settled).
+    if st.session_state.get("tab_clicked_once"):
+        st_components.html(
+            """
+            <script>
+              (function () {
+                const body = window.parent.document.body;
+                if (body) body.classList.add('tab-hint-trigger');
+              })();
+            </script>
+            """,
+            height=0,
         )
 
     # -----------------------------------------------------------------------
