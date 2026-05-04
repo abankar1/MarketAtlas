@@ -10,13 +10,13 @@ fetch_available_date_bounds(db_url, index_key)      cached 60 s
 get_treemap_data_cached(db_url, index_key, ...)     session LRU cache
 get_ohlcv_cached(db_url, symbol, ...)               session LRU cache
 get_news_cached(token, symbol, ...)                 process-wide @st.cache_data (12h TTL)
-get_news_api_call_count()                           int — actual Marketaux calls since server start
 _get_session_cache()                                raw OrderedDict (for sidebar stats)
 _get_ohlcv_cache()                                  raw OrderedDict (for cache clear)
 """
 from __future__ import annotations
 
 import datetime as dt
+import sys
 from collections import OrderedDict
 
 import pandas as pd
@@ -335,20 +335,22 @@ def get_ohlcv_cached(
 # across all browser sessions of the same server.
 # ---------------------------------------------------------------------------
 
-# Track actual Marketaux API calls (cache misses) since process start so the
-# sidebar can show a useful counter — @st.cache_data doesn't expose hit/miss.
-_NEWS_API_CALLS = 0
-
-
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False, max_entries=50)
 def _fetch_news_data(token: str, symbol: str, limit: int) -> list[dict]:
     """
     Process-wide cached news fetch. Streamlit hashes the args and caches the
     return value for CACHE_TTL_SECONDS — every call within that window is
     served from memory without hitting Marketaux. Survives page refreshes.
+
+    Logs each actual Marketaux call so quota usage can be audited from the
+    Streamlit server log without surfacing it in the UI.
     """
-    global _NEWS_API_CALLS
-    _NEWS_API_CALLS += 1
+    print(
+        f"[news] Marketaux fetch: symbol={symbol} limit={limit} "
+        f"at {dt.datetime.now().isoformat(timespec='seconds')}",
+        file=sys.stderr,
+        flush=True,
+    )
     client = NewsClient(token=token)
     return client.fetch_news(symbol, limit=limit)
 
@@ -367,8 +369,3 @@ def get_news_cached(
     Raises NewsClientError on API failures (caller renders a warning).
     """
     return _fetch_news_data(token, symbol, limit)
-
-
-def get_news_api_call_count() -> int:
-    """Total Marketaux API calls made since the Streamlit server started."""
-    return _NEWS_API_CALLS
