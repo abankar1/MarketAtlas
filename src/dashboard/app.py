@@ -269,22 +269,74 @@ def main() -> None:
             width: auto !important;
           }
 
-          /* Heatmap movers strip: single horizontally-scrollable row */
+          /* Heatmap movers strip: fit all 5 cards in one row, no scroll.
+             align-items: flex-start prevents Streamlit's column flex from
+             stretching cards to equal heights — important because the
+             second row otherwise inherits extra vertical space from its
+             parent block and the colored border-left visibly elongates. */
           [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
             + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
             flex-wrap: nowrap !important;
-            overflow-x: auto;
-            scrollbar-width: none;
-          }
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]::-webkit-scrollbar {
-            display: none;
+            gap: 0.25rem !important;
+            overflow: visible !important;
+            align-items: flex-start !important;
           }
           [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
             + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
-            flex: 0 0 auto !important;
-            min-width: 5.5rem !important;
+            flex: 1 1 0 !important;
+            min-width: 0 !important;
             width: auto !important;
+            align-self: flex-start !important;
+            height: auto !important;
+          }
+          /* Streamlit's stMarkdown chain reports a fixed text-line height
+             (~17px) regardless of the rendered card (31px), so the cards
+             visually overflow downward and any element below (the heatmap
+             chart) covers the bottom curve of the red brackets. Force the
+             stLayoutWrapper holding each mover row to reserve enough room
+             for the actual card height. */
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"] {
+            min-height: 36px !important;
+            padding-bottom: 16px !important;
+          }
+          /* Compact each mover card so 5 fit across at 375px width.
+             width: 100% so the card fills its column (uniform widths across
+             both rows); height: auto + box-sizing keep the colored border
+             matched to the text content height, not stretched. */
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"]
+            [data-testid="stMarkdownContainer"] > div {
+            display: block !important;
+            width: 100% !important;
+            height: auto !important;
+            box-sizing: border-box !important;
+            padding: 4px 6px !important;
+            border-left-width: 3px !important;
+            min-width: 0 !important;
+            overflow: hidden !important;
+          }
+          /* Breathing room between the green row and the "Top 5 ▼" caption.
+             Targets the caption that immediately follows the first mover row. */
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"]
+            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
+            margin-top: 0.5rem !important;
+          }
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"]
+            [data-testid="stMarkdownContainer"] > div > div:first-child {
+            font-size: 0.58em !important;
+            line-height: 1.1 !important;
+          }
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"]
+            [data-testid="stMarkdownContainer"] > div > div:nth-child(2) {
+            font-size: 0.72em !important;
+            line-height: 1.15 !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
           }
 
           /* Heatmap Options expander: keep the 3 controls (View / Sectors /
