@@ -185,36 +185,43 @@ def main() -> None:
 
         /* ---------- Mobile (≤640px) ---------- */
         @media (max-width: 640px) {
-          /* Pin the title into the header area on mobile so it sits right
-             next to the >> sidebar-toggle button instead of taking its own
-             line below the header. position: fixed pulls it out of normal
-             flow, freeing the caption to slide up. */
+          /* Pin title into the 60px Streamlit header on mobile.
+             Subtitle is injected as ::after so both render together inside
+             the fixed h1 — page content (tabs) starts right after the header. */
           h1 {
             position: fixed !important;
-            /* Vertical-center on the >> sidebar-toggle button (whose center
-               sits ~30px from the top of the 60px-tall Streamlit header). */
-            top: 1.05rem !important;
+            /* Vertically centered on the >> sidebar-toggle button (whose
+               center sits ~30px from the top of the 60px-tall header). */
+            top: 0.85rem !important;
             left: 3rem !important;
-            font-size: 1.15rem !important;
-            line-height: 1.4 !important;
+            font-size: 1.1rem !important;
+            line-height: 1.2 !important;
             margin: 0 !important;
             padding: 0 !important;
             z-index: 999990;
+            max-width: calc(100vw - 7rem);
           }
+          h1::after {
+            content: "Interactive Market Intelligence Dashboard";
+            display: block;
+            font-size: 0.6rem;
+            line-height: 1.1;
+            font-weight: 400;
+            opacity: 0.65;
+            margin-top: 0.1rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          /* Hide the real caption on mobile — its text now lives in h1::after. */
+          [data-testid="stElementContainer"]:has(h1)
+            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
+            display: none !important;
+          }
+          /* Content starts right below the title + subtitle stack. */
           .block-container {
-            /* Tuned so the gap between the header bottom and the caption
-               matches the structural ~16px gap between the caption and the
-               tabs row below — caption visually centred between them. */
-            padding-top: 3.75rem !important;
-            padding-bottom: 0.25rem !important;
-          }
-          /* Caption text — zero margins so the wrapping container alone
-             controls the spacing (set via padding-top + flex gap above). */
-          .block-container > [data-testid="stVerticalBlock"]
-            > [data-testid="stElementContainer"]
-            [data-testid="stMarkdownContainer"] p {
-            margin-top: 0 !important;
-            margin-bottom: 0 !important;
+            padding-top: 3rem !important;
+            padding-bottom: 0.5rem !important;
           }
           /* Tighten the gap between every vertical block on mobile so the
              whole page feels more compact. Default is ~1rem between siblings. */
@@ -403,24 +410,31 @@ def main() -> None:
           }
           [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
             + [data-testid="stLayoutWrapper"] [data-testid="stMetricLabel"] {
-            font-size: 0.7rem !important;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
           }
+          /* Pin every label's inner <p> to the same size so all 4 read uniform. */
+          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
+            + [data-testid="stLayoutWrapper"] [data-testid="stMetricLabel"] p {
+            font-size: 0.75rem !important;
+            font-weight: 400 !important;
+            line-height: 1.2 !important;
+          }
           /* First metric ("Unique symbols") wouldn't fit on mobile — swap to
-             "Unique" via the same hide-and-inject pseudo-element pattern.
-             The label text is rendered inside a nested <p>. */
+             "Unique" via the hide-and-inject pseudo-element pattern. */
           [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
             + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]
             > div:nth-child(1) [data-testid="stMetricLabel"] p {
-            font-size: 0;
+            font-size: 0 !important;
           }
           [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
             + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]
             > div:nth-child(1) [data-testid="stMetricLabel"] p::before {
             content: "Unique";
-            font-size: 0.7rem;
+            font-size: 0.75rem;
+            font-weight: 400;
+            line-height: 1.2;
           }
           [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
             + [data-testid="stLayoutWrapper"] [data-testid="stMetricValue"] {
