@@ -1,0 +1,12 @@
+[client]
+# Hide the entire top-right toolbar (kebab menu + "Deploy" button) by default.
+# This matches what end users should see — a clean, distraction-free interface
+# without developer affordances like Clear cache, Rerun, or screencast.
+#
+# Local developers can opt back into the full toolbar (incl. Clear cache) for
+# debugging by overriding via env var when launching the app:
+#
+#   STREAMLIT_CLIENT_TOOLBAR_MODE=developer streamlit run src/dashboard/app.py
+#
+# Other valid values: "auto", "developer", "viewer", "minimal".
+toolbarMode = "minimal"
