@@ -27,6 +27,7 @@ from src.ai.cache import (
 )
 from src.ai.client import AIClient, AIClientError
 from src.ai.intent_router import RoutedTemplate, RoutingMiss, route
+from src.ai.narrate import summarize as narrate_result
 from src.ai.nl_to_sql import (
     CannotAnswerError,
     GeneratedQuery,
@@ -105,6 +106,29 @@ def _log_summary(
         parts.append(f"detail='{_truncate(detail, 120)}'")
     parts.append(f"q='{_truncate(question, 100)}'")
     print(" ".join(parts), file=sys.stderr, flush=True)
+
+
+def _attach_narrative(
+    outcome: dict, ai_client: AIClient, question: str
+) -> dict:
+    """
+    Best-effort one-liner summary attached to a successful outcome. Mutates
+    and returns the same dict so callers can `return _attach_narrative(...)`
+    inline. Failures (API down, empty rows beyond the empty handling in
+    narrate.summarize) leave the outcome unchanged.
+    """
+    if not outcome.get("ok"):
+        return outcome
+    r = outcome.get("result")
+    if r is None:
+        return outcome
+    narration = narrate_result(ai_client, question, r.columns, r.rows)
+    if narration is None:
+        return outcome
+    text, tokens = narration
+    outcome["narrative"] = text
+    outcome["narrative_tokens"] = tokens
+    return outcome
 
 
 def _run_query(
@@ -205,7 +229,7 @@ def _run_query(
                 rows=result.row_count, duration_ms=result.duration_ms,
                 input_tokens=routing.input_tokens, output_tokens=routing.output_tokens,
             )
-            return {
+            return _attach_narrative({
                 "ok": True,
                 "via": "template",
                 "template_name": routing.name,
@@ -219,7 +243,7 @@ def _run_query(
                     "cache_read": routing.cache_read_tokens,
                     "cache_creation": routing.cache_creation_tokens,
                 },
-            }
+            }, ai_client, question)
         except TemplateError as e:
             # Param mismatch from the router (e.g. unknown sector). Don't
             # fall through to AI-SQL — the model already chose this template,
@@ -342,7 +366,7 @@ def _run_query(
             input_tokens=generated.input_tokens + router_tokens["input"],
             output_tokens=generated.output_tokens + router_tokens["output"],
         )
-        return {
+        return _attach_narrative({
             "ok": True,
             "via": "ai_sql",
             "from_cache": ai_sql_fully_cached,
@@ -355,7 +379,7 @@ def _run_query(
                 "cache_read": generated.cache_read_tokens + router_tokens["cache_read"],
                 "cache_creation": generated.cache_creation_tokens + router_tokens["cache_creation"],
             },
-        }
+        }, ai_client, question)
 
     except CannotAnswerError as e:
         _log_summary(
@@ -624,6 +648,10 @@ def _render_history_entry(entry: dict, idx: int) -> None:
             elif cached:
                 # End users still get a small "instant" hint when no API was hit
                 st.caption("instant response (no AI call)")
+
+            narrative = outcome.get("narrative")
+            if narrative:
+                st.markdown(f"**A:** {narrative}")
 
             df = pd.DataFrame(r.rows, columns=r.columns)
             st.dataframe(df, use_container_width=True, hide_index=True)
