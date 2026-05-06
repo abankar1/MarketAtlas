@@ -37,6 +37,7 @@ from src.dashboard.data import (  # noqa: E402
     get_treemap_data_cached,
 )
 from src.dashboard.heatmap import render_heatmap_tab  # noqa: E402
+from src.dashboard.ask import render_ask_tab  # noqa: E402
 from src.dashboard.index_overlap import render_index_overlap_tab  # noqa: E402
 from src.dashboard.news import render_news_tab  # noqa: E402
 from src.dashboard.prefs import load_prefs, save_prefs  # noqa: E402
@@ -120,12 +121,19 @@ def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None
 
 def _on_tab_click(tab_name: str) -> None:
     """on_click callback for custom tab navigation buttons."""
+    prev = st.session_state.get("active_tab")
     st.session_state["active_tab"] = tab_name
     # Track that the user has interacted with the tab strip at least once.
     # The mobile tab-reveal animation injects only on the rerun *after* the
     # first such click, by which time Streamlit's initial reconciliation has
     # finished and the columns DOM is stable enough to animate.
     st.session_state["tab_clicked_once"] = True
+    print(
+        f"[app] {dt.datetime.now().isoformat(timespec='seconds')} "
+        f"tab change: {prev!r} → {tab_name!r}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +184,19 @@ def _seed_prefs_once() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Market Atlas", layout="wide")
+
+    # First-run-per-session log. Streamlit reruns main() on every interaction;
+    # gating on session_state ensures one app-load line per browser session,
+    # not one per rerun.
+    if not st.session_state.get("_app_loaded_logged"):
+        print(
+            f"[app] {dt.datetime.now().isoformat(timespec='seconds')} "
+            f"new session loaded — Streamlit started serving Market Atlas",
+            file=sys.stderr,
+            flush=True,
+        )
+        st.session_state["_app_loaded_logged"] = True
+
     st.markdown(
         """
         <style>
@@ -511,6 +532,9 @@ def main() -> None:
     cfg = load_config()
     db_url = (cfg.get("db_url") or "").strip()
     marketaux_token = (cfg.get("marketaux_token") or "").strip()
+    db_url_readonly = (cfg.get("db_url_readonly") or "").strip()
+    anthropic_api_key = (cfg.get("anthropic_api_key") or "").strip()
+    anthropic_model = (cfg.get("anthropic_model") or "").strip() or "claude-haiku-4-5"
 
     if not db_url:
         st.error(
@@ -518,6 +542,16 @@ def main() -> None:
             "src/config/configuration.json (or src/config/config.json)."
         )
         st.stop()
+
+    # Construct the Anthropic client once per page render. None if no key
+    # is configured — the Ask tab renders a friendly warning in that case.
+    ai_client = None
+    if anthropic_api_key:
+        from src.ai.client import AIClient
+        try:
+            ai_client = AIClient(api_key=anthropic_api_key, model=anthropic_model)
+        except ValueError:
+            ai_client = None
 
     # -----------------------------------------------------------------------
     # Sidebar — index universe
@@ -675,7 +709,7 @@ def main() -> None:
     # Session-state buttons replace st.tabs, which resets to tab 0 on every
     # full page rerun in Streamlit 1.53 (key= parameter not supported).
     # -----------------------------------------------------------------------
-    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap"]
+    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap", "Ask"]
     if "active_tab" not in st.session_state:
         st.session_state["active_tab"] = "Heatmap"
 
@@ -731,6 +765,13 @@ def main() -> None:
 
     elif _active_tab == "Index Overlap":
         render_index_overlap_tab(db_url)
+
+    elif _active_tab == "Ask":
+        render_ask_tab(
+            ai_client=ai_client,
+            db_url_readonly=db_url_readonly,
+            db_url=db_url,
+        )
 
     # Persist UI prefs to disk so they survive tab close / refresh.
     save_prefs({
