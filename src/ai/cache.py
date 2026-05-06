@@ -141,39 +141,57 @@ def _normalise(question: str) -> str:
     return re.sub(r"\s+", " ", question.strip().lower())
 
 
-def _key(question: str, model: str) -> str:
-    return f"{model}::{_normalise(question)}"
+def _key(question: str, model: str, last_ticker: str | None = None) -> str:
+    """
+    Cache key. `last_ticker` folds the conversational context into the key
+    so a referential follow-up like "what about volume?" caches separately
+    when the previous stock was TSLA vs. AAPL — otherwise we'd serve the
+    wrong cached SQL for the wrong stock.
+    """
+    ctx = (last_ticker or "").upper()
+    return f"{model}::{ctx}::{_normalise(question)}"
 
 
 # Router decisions ----------------------------------------------------------
 
-def lookup_route(question: str, model: str) -> RouteCacheEntry | None:
-    """Return the cached router decision for (question, model), or None."""
-    return _ROUTE_CACHE.get(_key(question, model))
+def lookup_route(
+    question: str, model: str, last_ticker: str | None = None
+) -> RouteCacheEntry | None:
+    """Return the cached router decision for (question, model, last_ticker)."""
+    return _ROUTE_CACHE.get(_key(question, model, last_ticker))
 
 
 def store_route_template(
-    question: str, model: str, template_name: str, params: dict
+    question: str, model: str, template_name: str, params: dict,
+    last_ticker: str | None = None,
 ) -> None:
     _ROUTE_CACHE.set(
-        _key(question, model),
+        _key(question, model, last_ticker),
         RouteCacheEntry(kind="template", name=template_name, params=dict(params)),
     )
 
 
-def store_route_miss(question: str, model: str) -> None:
-    _ROUTE_CACHE.set(_key(question, model), RouteCacheEntry(kind="miss"))
+def store_route_miss(
+    question: str, model: str, last_ticker: str | None = None
+) -> None:
+    _ROUTE_CACHE.set(
+        _key(question, model, last_ticker), RouteCacheEntry(kind="miss")
+    )
 
 
 # AI-SQL fallback ----------------------------------------------------------
 
-def lookup_ai_sql(question: str, model: str) -> str | None:
-    """Return the cached AI-generated SQL for (question, model), or None."""
-    return _AI_SQL_CACHE.get(_key(question, model))
+def lookup_ai_sql(
+    question: str, model: str, last_ticker: str | None = None
+) -> str | None:
+    """Return the cached AI-generated SQL for (question, model, last_ticker)."""
+    return _AI_SQL_CACHE.get(_key(question, model, last_ticker))
 
 
-def store_ai_sql(question: str, model: str, sql: str) -> None:
-    _AI_SQL_CACHE.set(_key(question, model), sql)
+def store_ai_sql(
+    question: str, model: str, sql: str, last_ticker: str | None = None
+) -> None:
+    _AI_SQL_CACHE.set(_key(question, model, last_ticker), sql)
 
 
 # Maintenance --------------------------------------------------------------

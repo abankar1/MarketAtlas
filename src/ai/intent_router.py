@@ -116,6 +116,14 @@ ABSOLUTE RULES:
      "last quarter"   → 90
      "this year"      → 365
    But if the user states an explicit number, use that.
+7. FOLLOW-UPS: The user message may begin with a
+   <previous_context>previously discussed ticker: XYZ</previous_context>
+   line. Use that ticker for `symbol` ONLY when the new question is a
+   referential follow-up with no ticker, company, sector, or index of its
+   own — e.g. "what about volume?", "and the highs?", "how about 90 days?".
+   If the new question names ANY ticker, company, sector, or index, ignore
+   the previous context. Never bind the previous ticker into a template
+   that operates over a sector or index instead of a single symbol.
 
 Available index-key mapping (string → INDEX_KEYS):
   S&P 500          → "sp500"
@@ -178,10 +186,20 @@ Examples:
 # route()
 # ----------------------------------------------------------------------------
 
-def route(client: AIClient, question: str) -> RoutedTemplate | RoutingMiss:
+def route(
+    client: AIClient,
+    question: str,
+    *,
+    last_ticker: str | None = None,
+) -> RoutedTemplate | RoutingMiss:
     """
     Single Claude call. Returns RoutedTemplate on a clean match, RoutingMiss
     if the model decided no template fits.
+
+    `last_ticker`, when supplied, lets the router resolve referential
+    follow-ups ("what about its volume?") by binding the prior ticker into
+    the matching template's `symbol` param. Explicit tickers in the new
+    question always override.
 
     Raises GenerationError if the response can't be parsed as JSON or the
     chosen template name is not in the registry.
@@ -190,9 +208,14 @@ def route(client: AIClient, question: str) -> RoutedTemplate | RoutingMiss:
     if not question:
         raise GenerationError("empty question")
 
+    user_message = (
+        f"<previous_context>previously discussed ticker: {last_ticker}</previous_context>\n"
+        f"{question}"
+    ) if last_ticker else question
+
     response = client.complete(
         system=SYSTEM_PROMPT,
-        user=question,
+        user=user_message,
         max_tokens=400,
         stop_sequences=["</json>"],
         temperature=0.0,

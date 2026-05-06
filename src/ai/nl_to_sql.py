@@ -388,6 +388,15 @@ ABSOLUTE RULES (never violate these):
     summary: latest close, 30-day return %, avg daily volume. NEVER
     refuse on grounds of vagueness. NEVER ask for clarification.
 11. NEVER respond conversationally. Output ONLY the <sql>...</sql> block.
+12. FOLLOW-UPS: The user message may begin with a
+    <previous_context>previously discussed ticker: XYZ</previous_context>
+    line. Use that ticker ONLY when the new question is clearly a
+    follow-up with no ticker, company name, or sector of its own —
+    e.g. "what about volume?", "and the highs?", "how about last 90 days?".
+    If the new question names ANY ticker, company, sector, or index, treat
+    the previous context as irrelevant and answer the new question on its
+    own terms. Never bind the previous ticker into a multi-stock or
+    sector-level query.
 
 Schema:
 {SCHEMA_DDL}
@@ -427,11 +436,53 @@ class GenerationError(Exception):
 
 _SQL_TAG = re.compile(r"<sql>(.*?)</sql>", re.DOTALL | re.IGNORECASE)
 _CANNOT_ANSWER = re.compile(r"CANNOT_ANSWER", re.IGNORECASE)
+_SYMBOL_LITERAL = re.compile(r"symbol\s*=\s*'([A-Z0-9.\-]{1,10})'", re.IGNORECASE)
 
 
-def generate_sql(client: AIClient, question: str) -> GeneratedQuery:
+def _with_context(question: str, last_ticker: str | None) -> str:
+    """
+    Prepend a one-line context preamble when we have a remembered ticker.
+    The model is instructed (rule 12 in SYSTEM_PROMPT) to use it ONLY when
+    the new question is referential ("what about volume?", "and the highs?")
+    and contains no ticker of its own.
+    """
+    if not last_ticker:
+        return question
+    return (
+        f"<previous_context>previously discussed ticker: {last_ticker}</previous_context>\n"
+        f"{question}"
+    )
+
+
+def extract_single_ticker(sql: str) -> str | None:
+    """
+    Return the single ticker referenced by `WHERE symbol = 'XXX'` if (and only
+    if) the SQL references exactly one. Used by the Ask tab to remember the
+    "current" stock so a follow-up like "what about its volume?" can reuse it
+    without the user retyping the ticker.
+
+    Multi-ticker queries (cross-stock comparisons), sector/index queries with
+    no symbol literal, and ambiguous matches all return None — we deliberately
+    only carry context forward when it's unambiguous.
+    """
+    matches = {m.group(1).upper() for m in _SYMBOL_LITERAL.finditer(sql or "")}
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def generate_sql(
+    client: AIClient,
+    question: str,
+    *,
+    last_ticker: str | None = None,
+) -> GeneratedQuery:
     """
     Generate a SQL query from a natural-language question.
+
+    `last_ticker` carries forward the single ticker (if any) referenced by
+    the immediately preceding successful query, so follow-ups like
+    "what about its volume?" or "and the highs?" resolve correctly. The
+    model is told to use it only when the new question has no ticker of
+    its own and is clearly referential — explicit tickers always override.
 
     Raises CannotAnswerError if the model declines.
     Raises GenerationError if the output cannot be parsed.
@@ -440,9 +491,11 @@ def generate_sql(client: AIClient, question: str) -> GeneratedQuery:
     if not question:
         raise GenerationError("empty question")
 
+    user_message = _with_context(question, last_ticker)
+
     response = client.complete(
         system=SYSTEM_PROMPT,
-        user=question,
+        user=user_message,
         max_tokens=800,
         stop_sequences=["</sql>"],
         temperature=0.0,

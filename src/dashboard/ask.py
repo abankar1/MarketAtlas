@@ -32,6 +32,7 @@ from src.ai.nl_to_sql import (
     CannotAnswerError,
     GeneratedQuery,
     GenerationError,
+    extract_single_ticker,
     generate_sql,
 )
 from src.ai.query_templates import TEMPLATES, TemplateError, render
@@ -136,6 +137,8 @@ def _run_query(
     ai_client: AIClient,
     db_url_readonly: str,
     db_url: str,
+    *,
+    last_ticker: str | None = None,
 ) -> dict:
     """
     Route → render → execute, with the AI-SQL flow as the fallback path.
@@ -147,7 +150,7 @@ def _run_query(
     # routing decision recently — no API call needed. The actual SQL still
     # runs against the current DB state, so daily data changes are picked up.
     model_id = ai_client.model
-    route_hit = lookup_route(question, model_id)
+    route_hit = lookup_route(question, model_id, last_ticker=last_ticker)
     routed_from_cache = False
 
     if route_hit is not None:
@@ -172,7 +175,7 @@ def _run_query(
             )
     else:
         try:
-            routing = route(ai_client, question)
+            routing = route(ai_client, question, last_ticker=last_ticker)
         except GenerationError as e:
             _log_summary(
                 question, model=model_id, status="generation_error",
@@ -198,9 +201,12 @@ def _run_query(
         # — re-asking the same out-of-template question shouldn't burn another
         # router call).
         if isinstance(routing, RoutedTemplate):
-            store_route_template(question, model_id, routing.name, routing.params)
+            store_route_template(
+                question, model_id, routing.name, routing.params,
+                last_ticker=last_ticker,
+            )
         else:
-            store_route_miss(question, model_id)
+            store_route_miss(question, model_id, last_ticker=last_ticker)
 
     if isinstance(routing, RoutedTemplate):
         try:
@@ -315,7 +321,7 @@ def _run_query(
     sql_from_cache = False
     try:
         # 1. Generate (or pull from cache)
-        cached_sql = lookup_ai_sql(question, model_id)
+        cached_sql = lookup_ai_sql(question, model_id, last_ticker=last_ticker)
         if cached_sql is not None:
             sql_from_cache = True
             # Synthesise a GeneratedQuery so downstream logging is uniform.
@@ -328,8 +334,10 @@ def _run_query(
                 cache_creation_tokens=0,
             )
         else:
-            generated = generate_sql(ai_client, question)
-            store_ai_sql(question, model_id, generated.sql)
+            generated = generate_sql(ai_client, question, last_ticker=last_ticker)
+            store_ai_sql(
+                question, model_id, generated.sql, last_ticker=last_ticker
+            )
 
         # 2. Validate (cheap; do this even on cache hits — the cached SQL
         # was validated before being stored, but a future schema/validator
@@ -533,6 +541,11 @@ def render_ask_tab(
         st.session_state.ask_history = []  # chronological: oldest first, newest last
     if "_ask_pending_example" not in st.session_state:
         st.session_state["_ask_pending_example"] = None
+    if "ask_last_ticker" not in st.session_state:
+        # Carries forward the single ticker (if any) referenced by the previous
+        # successful query, so a follow-up like "what about volume?" can resolve
+        # without the user retyping the symbol. Cleared on history clear.
+        st.session_state.ask_last_ticker = None
 
     # ---- Example chips — click to run immediately ----
     # chat_input doesn't accept programmatic prefill, so a chip click sets a
@@ -570,6 +583,7 @@ def render_ask_tab(
     with clear_history_col:
         if st.button("Clear history", use_container_width=True):
             st.session_state.ask_history = []
+            st.session_state.ask_last_ticker = None
             st.rerun()
     if clear_cache_col is not None:
         with clear_cache_col:
@@ -600,11 +614,19 @@ def render_ask_tab(
         else:
             with st.spinner("Asking AI..."):
                 outcome = _run_query(
-                    trimmed, ai_client, db_url_readonly, db_url
+                    trimmed, ai_client, db_url_readonly, db_url,
+                    last_ticker=st.session_state.ask_last_ticker,
                 )
             st.session_state.ask_history.append(
                 {"question": trimmed, "outcome": outcome}
             )
+            # Update the conversational anchor: only carry forward when the
+            # query unambiguously narrowed to a single ticker. Multi-stock,
+            # sector, and index queries clear it so a follow-up doesn't
+            # silently pin to a stale stock.
+            if outcome.get("ok") and outcome.get("sql"):
+                ticker = extract_single_ticker(outcome["sql"])
+                st.session_state.ask_last_ticker = ticker
             st.rerun()
 
     # ---- Render history (oldest first, newest at bottom — chat-style) ----
