@@ -129,7 +129,7 @@ start_px AS (
   SELECT DISTINCT ON (b.symbol) b.symbol, b.adj_close AS px
   FROM daily_bars b
   JOIN universe u ON u.symbol = b.symbol
-  WHERE (b.ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - {days}
+  WHERE (b.ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - {days}
   ORDER BY b.symbol, b.ts ASC
 ),
 end_px AS (
@@ -167,7 +167,7 @@ SELECT ROUND(AVG(volume)) AS avg_volume,
        COUNT(*)           AS trading_days
 FROM daily_bars
 WHERE symbol = %(symbol)s
-  AND (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - {days}
+  AND (ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - {days}
 LIMIT 1""",
     nl_examples=(
         "What's the average daily volume for NVDA over the past 90 days?",
@@ -200,7 +200,7 @@ start_px AS (
   SELECT DISTINCT ON (b.symbol) b.symbol, b.adj_close AS px
   FROM daily_bars b
   JOIN universe u ON u.symbol = b.symbol
-  WHERE (b.ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - {days}
+  WHERE (b.ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - {days}
   ORDER BY b.symbol, b.ts ASC
 ),
 end_px AS (
@@ -284,7 +284,7 @@ WITH recent AS (
          (ts AT TIME ZONE 'UTC')::date AS d,
          volume
   FROM daily_bars
-  WHERE (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - {lookback_days_plus_5}
+  WHERE (ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - {lookback_days_plus_5}
 ),
 ranked AS (
   SELECT symbol, d, volume,

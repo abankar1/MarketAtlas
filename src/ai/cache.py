@@ -11,8 +11,9 @@ Caches two things separately, both keyed on the normalised question + model:
 We deliberately do NOT cache database results. The cached entries hold only
 the LLM's decision; the actual SQL still runs against the current DB state on
 every query, so daily price/volume changes are picked up automatically.
-Templates use CURRENT_DATE in their SQL, so a cached "30 days" routing today
-gives a different result tomorrow — that's exactly what we want.
+Templates anchor "past N days" to the latest bar in daily_bars, so a cached
+"30 days" routing today gives a different result after a fresh data refresh
+— that's exactly what we want.
 
 Cache scope
 -----------

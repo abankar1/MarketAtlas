@@ -103,7 +103,7 @@ start_px AS (
   SELECT DISTINCT ON (b.symbol) b.symbol, b.adj_close AS px
   FROM daily_bars b
   JOIN universe u ON u.symbol = b.symbol
-  WHERE (b.ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '30 days'
+  WHERE (b.ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - INTERVAL '30 days'
   ORDER BY b.symbol, b.ts ASC
 ),
 end_px AS (
@@ -129,7 +129,7 @@ LIMIT 100;
 SELECT ROUND(AVG(volume)) AS avg_volume
 FROM daily_bars
 WHERE symbol = 'NVDA'
-  AND (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '90 days';
+  AND (ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - INTERVAL '90 days';
 </sql>
 </example>
 
@@ -158,7 +158,7 @@ start_px AS (
   SELECT DISTINCT ON (b.symbol) b.symbol, b.adj_close AS px
   FROM daily_bars b
   JOIN universe u ON u.symbol = b.symbol
-  WHERE (b.ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '7 days'
+  WHERE (b.ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - INTERVAL '7 days'
   ORDER BY b.symbol, b.ts ASC
 ),
 end_px AS (
@@ -185,7 +185,7 @@ WITH recent AS (
          (ts AT TIME ZONE 'UTC')::date AS d,
          volume
   FROM daily_bars
-  WHERE (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '25 days'
+  WHERE (ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - INTERVAL '25 days'
 ),
 ranked AS (
   SELECT symbol, d, volume,
@@ -257,7 +257,7 @@ WITH recent AS (
          ROW_NUMBER() OVER (ORDER BY ts DESC) AS rn
   FROM daily_bars
   WHERE symbol = 'NFLX'
-    AND (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '30 days'
+    AND (ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - INTERVAL '30 days'
 ),
 window_stats AS (
   SELECT
@@ -290,7 +290,7 @@ WITH recent AS (
          ROW_NUMBER() OVER (ORDER BY ts DESC) AS rn
   FROM daily_bars
   WHERE symbol = 'TSLA'
-    AND (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '30 days'
+    AND (ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - INTERVAL '30 days'
 ),
 window_stats AS (
   SELECT
@@ -322,7 +322,7 @@ SELECT ROUND(AVG(volume)) AS avg_volume,
        COUNT(*) AS trading_days
 FROM daily_bars
 WHERE symbol = 'MSFT'
-  AND (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '60 days'
+  AND (ts AT TIME ZONE 'UTC')::date >= (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - INTERVAL '60 days'
 LIMIT 1;
 </sql>
 </example>
@@ -359,6 +359,17 @@ ABSOLUTE RULES (never violate these):
    statement type.
 3. Always include LIMIT (max 1000) unless the query returns a single aggregate value.
 4. Always cast timestamps with (ts AT TIME ZONE 'UTC')::date when comparing to dates.
+   Anchor every relative time window ("past N days", "this week", "last quarter")
+   to the LATEST BAR DATE in daily_bars — NOT to CURRENT_DATE. The DB is
+   refreshed by an external job and can lag by days; using CURRENT_DATE
+   silently returns zero rows whenever bars are stale. Use this inline
+   scalar subquery as the upper anchor:
+     (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars)
+   So "past 30 days" becomes:
+     (ts AT TIME ZONE 'UTC')::date >=
+       (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - INTERVAL '30 days'
+   NEVER write (SELECT MAX((ts AT TIME ZONE 'UTC')::date) FROM daily_bars) - INTERVAL '...'. Absolute date literals
+   ('2024-01-01' etc.) are still fine when the user names a year.
 5. Always filter constituent tables with: WHERE is_active IS NOT FALSE
    (NOT "= TRUE" — there are legacy NULL rows that must be included.)
 6. Use adj_close, not close, when calculating returns or comparing prices across time.
