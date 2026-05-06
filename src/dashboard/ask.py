@@ -530,7 +530,7 @@ def render_ask_tab(
 
     # ---- Session state init ----
     if "ask_history" not in st.session_state:
-        st.session_state.ask_history = []  # newest-first list of {question, outcome}
+        st.session_state.ask_history = []  # chronological: oldest first, newest last
     if "_ask_pending_example" not in st.session_state:
         st.session_state["_ask_pending_example"] = None
 
@@ -602,15 +602,15 @@ def render_ask_tab(
                 outcome = _run_query(
                     trimmed, ai_client, db_url_readonly, db_url
                 )
-            st.session_state.ask_history.insert(
-                0, {"question": trimmed, "outcome": outcome}
+            st.session_state.ask_history.append(
+                {"question": trimmed, "outcome": outcome}
             )
             st.rerun()
 
-    # ---- Render history (newest first, max 10) ----
+    # ---- Render history (oldest first, newest at bottom — chat-style) ----
     if st.session_state.ask_history:
         st.markdown("---")
-        for i, entry in enumerate(st.session_state.ask_history[:10]):
+        for i, entry in enumerate(st.session_state.ask_history[-10:]):
             _render_history_entry(entry, idx=i)
 
 
