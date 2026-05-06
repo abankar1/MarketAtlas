@@ -4,6 +4,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+import sqlglot
+from sqlglot import expressions as exp
+
 from .client import AIClient
 
 
@@ -246,10 +249,81 @@ SELECT 'CANNOT_ANSWER' AS reason,
 </example>
 
 <example>
-<question>is this a legit question?</question>
+<question>what is going on with netflix stock?</question>
 <sql>
-SELECT 'CANNOT_ANSWER' AS reason,
-       'meta-question — please ask about stock data (e.g. returns, volume, sectors, index membership)' AS detail;
+-- "netflix" → NFLX (resolved here, not in SQL).
+WITH recent AS (
+  SELECT ts, adj_close, volume,
+         ROW_NUMBER() OVER (ORDER BY ts DESC) AS rn
+  FROM daily_bars
+  WHERE symbol = 'NFLX'
+    AND (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '30 days'
+),
+window_stats AS (
+  SELECT
+    MAX(CASE WHEN rn = 1 THEN adj_close END) AS latest_close,
+    MIN(CASE WHEN rn = 1 THEN ts END)::date AS latest_date,
+    MAX(CASE WHEN rn = (SELECT MAX(rn) FROM recent) THEN adj_close END) AS start_close,
+    AVG(volume) AS avg_volume,
+    COUNT(*) AS trading_days
+  FROM recent
+)
+SELECT
+  'NFLX' AS symbol,
+  latest_date,
+  ROUND(latest_close::numeric, 2) AS latest_close,
+  ROUND(start_close::numeric, 2) AS price_30d_ago,
+  ROUND(((latest_close - start_close) / start_close * 100)::numeric, 2) AS return_pct_30d,
+  ROUND(avg_volume) AS avg_daily_volume_30d,
+  trading_days
+FROM window_stats
+LIMIT 1;
+</sql>
+</example>
+
+<example>
+<question>how is tesla doing</question>
+<sql>
+-- "tesla" → TSLA.
+WITH recent AS (
+  SELECT ts, adj_close, volume,
+         ROW_NUMBER() OVER (ORDER BY ts DESC) AS rn
+  FROM daily_bars
+  WHERE symbol = 'TSLA'
+    AND (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '30 days'
+),
+window_stats AS (
+  SELECT
+    MAX(CASE WHEN rn = 1 THEN adj_close END) AS latest_close,
+    MIN(CASE WHEN rn = 1 THEN ts END)::date AS latest_date,
+    MAX(CASE WHEN rn = (SELECT MAX(rn) FROM recent) THEN adj_close END) AS start_close,
+    AVG(volume) AS avg_volume,
+    COUNT(*) AS trading_days
+  FROM recent
+)
+SELECT
+  'TSLA' AS symbol,
+  latest_date,
+  ROUND(latest_close::numeric, 2) AS latest_close,
+  ROUND(start_close::numeric, 2) AS price_30d_ago,
+  ROUND(((latest_close - start_close) / start_close * 100)::numeric, 2) AS return_pct_30d,
+  ROUND(avg_volume) AS avg_daily_volume_30d,
+  trading_days
+FROM window_stats
+LIMIT 1;
+</sql>
+</example>
+
+<example>
+<question>microsft daily volume past 60 days</question>
+<sql>
+-- Misspelling "microsft" → MSFT (typo of "microsoft").
+SELECT ROUND(AVG(volume)) AS avg_volume,
+       COUNT(*) AS trading_days
+FROM daily_bars
+WHERE symbol = 'MSFT'
+  AND (ts AT TIME ZONE 'UTC')::date >= CURRENT_DATE - INTERVAL '60 days'
+LIMIT 1;
 </sql>
 </example>
 
@@ -257,7 +331,15 @@ SELECT 'CANNOT_ANSWER' AS reason,
 <question>hello</question>
 <sql>
 SELECT 'CANNOT_ANSWER' AS reason,
-       'not a data question — ask about stock returns, volume, sectors, or index membership' AS detail;
+       'not a data question — ask about a stock, sector, or index (e.g. "what is going on with NFLX?", "Top 5 NASDAQ-100 movers this week")' AS detail;
+</sql>
+</example>
+
+<example>
+<question>are you working?</question>
+<sql>
+SELECT 'CANNOT_ANSWER' AS reason,
+       'meta-question — ask a stock data question instead (e.g. "How is AAPL doing?", "Top S&P 500 gainers this month")' AS detail;
 </sql>
 </example>
 """
@@ -283,14 +365,29 @@ ABSOLUTE RULES (never violate these):
 7. The name column differs by constituent table: sp500_constituents.security,
    nasdaq100_constituents.company, dow30_constituents.company. Prefer assets.name
    when joining.
-8. If the question cannot be answered from this schema, output:
-   <sql>SELECT 'CANNOT_ANSWER' AS reason, '<short reason>' AS detail;</sql>
-9. If the input is conversational, a greeting, a meta-question about the
-   system itself ("are you working?", "what can you do?", "is this a real
-   question?"), gibberish, or anything that isn't a request for data, ALSO
-   use the CANNOT_ANSWER pattern from rule 8 with a short detail explaining
-   what to ask instead. NEVER respond conversationally. NEVER ask for
-   clarification. Output ONLY the <sql>...</sql> block.
+8. CANNOT_ANSWER is for exactly two situations:
+   (a) The input contains NO reference to any company, stock, index, or
+       market concept — pure greetings ("hello", "hi"), meta-questions
+       about the system ("are you working?"), or gibberish with no
+       financial meaning.
+   (b) The question asks for data this database does not contain:
+       P/E ratios, EPS, earnings, analyst ratings, news, options.
+   In every other case — including vague, casual, or ambiguous questions
+   that mention any company or market topic — generate SQL. When in
+   doubt, generate SQL.
+9. COMPANY NAME → TICKER: Resolve any company name (full, partial,
+   misspelled, nicknamed) to its correct US exchange ticker using your
+   training knowledge, then write SQL with only the ticker symbol:
+   WHERE symbol = 'ABNB'. DO NOT use ILIKE on assets.name.
+   You know the tickers for all major US-listed companies.
+   If a name genuinely has no matching US-listed ticker, use
+   CANNOT_ANSWER with: 'could not identify a US ticker for "<name>"'.
+10. Vague questions naming a company ARE data questions. "tell me about
+    airbnb", "what's going on with amazon", "okay what about nvidia",
+    "how is uber doing" — any of these must return a last-30-days price
+    summary: latest close, 30-day return %, avg daily volume. NEVER
+    refuse on grounds of vagueness. NEVER ask for clarification.
+11. NEVER respond conversationally. Output ONLY the <sql>...</sql> block.
 
 Schema:
 {SCHEMA_DDL}
@@ -376,10 +473,29 @@ def generate_sql(client: AIClient, question: str) -> GeneratedQuery:
     sql = match.group(1).strip()
 
     if _CANNOT_ANSWER.search(sql):
-        detail_match = re.search(
-            r"'CANNOT_ANSWER'\s*AS\s*reason\s*,\s*'([^']+)'", sql, re.IGNORECASE
-        )
-        detail = detail_match.group(1) if detail_match else ""
+        # Parse the SQL with sqlglot and extract string literals — this
+        # correctly handles SQL's '' escape and any embedded apostrophes
+        # (e.g. "Netflix's recent performance"), which a naïve regex
+        # like '([^']+)' truncates at the first inner apostrophe.
+        detail = ""
+        try:
+            parsed = sqlglot.parse_one(sql, dialect="postgres")
+            literals = [
+                lit.this for lit in parsed.find_all(exp.Literal) if lit.is_string
+            ]
+            # Expected literal order: ['CANNOT_ANSWER', '<detail>'].
+            if len(literals) >= 2 and literals[0].upper() == "CANNOT_ANSWER":
+                detail = literals[1]
+        except Exception:
+            # Fall back to the simple regex if sqlglot can't parse the
+            # CANNOT_ANSWER stub for some reason — better a truncated
+            # detail than no detail at all.
+            m = re.search(
+                r"'CANNOT_ANSWER'\s*AS\s*reason\s*,\s*'([^']+)'",
+                sql,
+                re.IGNORECASE,
+            )
+            detail = m.group(1) if m else ""
         raise CannotAnswerError("question is out of scope", detail=detail)
 
     return GeneratedQuery(
