@@ -58,11 +58,53 @@ def _now() -> str:
     return dt.datetime.now().isoformat(timespec="seconds")
 
 
-def _log(msg: str) -> None:
-    """Single-line stderr log with [ask] prefix and timestamp.
-    Visible in the Streamlit server's terminal/log file — same convention
-    as src/dashboard/data.py uses for Marketaux fetches."""
-    print(f"[ask] {_now()} {msg}", file=sys.stderr, flush=True)
+def _truncate(s: str, n: int = 100) -> str:
+    s = s.replace("\n", " ").replace("\r", " ")
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _log_summary(
+    question: str,
+    *,
+    model: str,
+    status: str,                       # success | cannot_answer | unsafe | timeout | execution | generation | ai_error
+    path: str | None = None,           # template | ai_sql
+    cached: bool = False,
+    template: str | None = None,
+    rows: int | None = None,
+    duration_ms: int | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    detail: str | None = None,
+) -> None:
+    """
+    One-line stderr summary per Ask query — every relevant field on one row
+    so grepping for a single question's full lifecycle is straightforward
+    even when many sessions interleave concurrently.
+
+    Example:
+      [ask] 2026-05-06T09:32:58 status=success path=template tmpl=cross_index_membership
+            cached=true rows=8 ms=24 tokens=0/0 q='Which stocks appear in all three indices?'
+
+    Full LLM response + bound params live in public.nl_queries — this log
+    is for at-a-glance triage, not full audit.
+    """
+    parts = [f"[ask] {_now()}", f"status={status}"]
+    if path:
+        parts.append(f"path={path}")
+    if template:
+        parts.append(f"tmpl={template}")
+    parts.append(f"cached={'true' if cached else 'false'}")
+    if rows is not None:
+        parts.append(f"rows={rows}")
+    if duration_ms is not None:
+        parts.append(f"ms={duration_ms}")
+    parts.append(f"tokens={input_tokens}/{output_tokens}")
+    parts.append(f"model={model}")
+    if detail:
+        parts.append(f"detail='{_truncate(detail, 120)}'")
+    parts.append(f"q='{_truncate(question, 100)}'")
+    print(" ".join(parts), file=sys.stderr, flush=True)
 
 
 def _run_query(
@@ -84,12 +126,9 @@ def _run_query(
     route_hit = lookup_route(question, model_id)
     routed_from_cache = False
 
-    _log(f"Q='{question[:120]}' model={model_id}")
-
     if route_hit is not None:
         routed_from_cache = True
         if route_hit.kind == "template":
-            _log(f"  router: CACHE HIT → template={route_hit.name}")
             routing = RoutedTemplate(
                 name=route_hit.name,
                 params=route_hit.params or {},
@@ -100,7 +139,6 @@ def _run_query(
                 cache_creation_tokens=0,
             )
         else:
-            _log(f"  router: CACHE HIT → miss (will fall back to AI-SQL)")
             routing = RoutingMiss(
                 raw_response="<cache>",
                 input_tokens=0,
@@ -112,14 +150,20 @@ def _run_query(
         try:
             routing = route(ai_client, question)
         except GenerationError as e:
-            _log(f"  router: ERROR (GenerationError) {e}")
+            _log_summary(
+                question, model=model_id, status="generation_error",
+                path="template", detail=f"router: {e}",
+            )
             log_nl_query(
                 db_url, question=question, status="generation_error",
                 error_message=f"router: {e}", path="template",
             )
             return {"ok": False, "kind": "generation", "msg": f"router: {e}"}
         except AIClientError as e:
-            _log(f"  router: ERROR (AIClientError) {e}")
+            _log_summary(
+                question, model=model_id, status="ai_error",
+                path="template", detail=f"router: {e}",
+            )
             log_nl_query(
                 db_url, question=question, status="generation_error",
                 error_message=f"router: {e}", path="template",
@@ -130,14 +174,8 @@ def _run_query(
         # — re-asking the same out-of-template question shouldn't burn another
         # router call).
         if isinstance(routing, RoutedTemplate):
-            _log(f"  router: API call → template={routing.name} "
-                 f"params={routing.params} tokens={routing.input_tokens}/{routing.output_tokens}"
-                 f" cache_read={routing.cache_read_tokens}")
             store_route_template(question, model_id, routing.name, routing.params)
         else:
-            _log(f"  router: API call → miss (will fall back to AI-SQL) "
-                 f"tokens={routing.input_tokens}/{routing.output_tokens}"
-                 f" cache_read={routing.cache_read_tokens}")
             store_route_miss(question, model_id)
 
     if isinstance(routing, RoutedTemplate):
@@ -161,8 +199,12 @@ def _run_query(
                 from_cache=routed_from_cache,
                 raw_response=routing.raw_response,
             )
-            _log(f"  → SUCCESS path=template rows={result.row_count} "
-                 f"db={result.duration_ms}ms cached={routed_from_cache}")
+            _log_summary(
+                question, model=model_id, status="success", path="template",
+                template=routing.name, cached=routed_from_cache,
+                rows=result.row_count, duration_ms=result.duration_ms,
+                input_tokens=routing.input_tokens, output_tokens=routing.output_tokens,
+            )
             return {
                 "ok": True,
                 "via": "template",
@@ -183,7 +225,12 @@ def _run_query(
             # fall through to AI-SQL — the model already chose this template,
             # so it understood the question; the parameter extraction is
             # what failed. Surface it clearly.
-            _log(f"  → REJECT path=template reason='template params: {e}'")
+            _log_summary(
+                question, model=model_id, status="unsafe", path="template",
+                template=routing.name, cached=routed_from_cache,
+                detail=f"template params: {e}",
+                input_tokens=routing.input_tokens, output_tokens=routing.output_tokens,
+            )
             log_nl_query(
                 db_url, question=question, status="unsafe_sql",
                 error_message=f"template params: {e}",
@@ -203,7 +250,11 @@ def _run_query(
                 "msg": f"Template '{routing.name}' got invalid params: {e}",
             }
         except QueryTimeoutError as e:
-            _log(f"  → TIMEOUT path=template")
+            _log_summary(
+                question, model=model_id, status="timeout", path="template",
+                template=routing.name, cached=routed_from_cache,
+                input_tokens=routing.input_tokens, output_tokens=routing.output_tokens,
+            )
             log_nl_query(
                 db_url, question=question, generated_sql=sql, status="timeout",
                 error_message=str(e), path="template", template_name=routing.name,
@@ -213,7 +264,12 @@ def _run_query(
             )
             return {"ok": False, "kind": "timeout", "msg": str(e), "sql": sql}
         except ExecutionError as e:
-            _log(f"  → EXEC ERROR path=template msg='{e}'")
+            _log_summary(
+                question, model=model_id, status="execution", path="template",
+                template=routing.name, cached=routed_from_cache,
+                detail=str(e),
+                input_tokens=routing.input_tokens, output_tokens=routing.output_tokens,
+            )
             log_nl_query(
                 db_url, question=question, generated_sql=sql, status="execution_error",
                 error_message=str(e), path="template", template_name=routing.name,
@@ -238,7 +294,6 @@ def _run_query(
         cached_sql = lookup_ai_sql(question, model_id)
         if cached_sql is not None:
             sql_from_cache = True
-            _log(f"  ai_sql: CACHE HIT")
             # Synthesise a GeneratedQuery so downstream logging is uniform.
             generated = GeneratedQuery(
                 sql=cached_sql,
@@ -250,8 +305,6 @@ def _run_query(
             )
         else:
             generated = generate_sql(ai_client, question)
-            _log(f"  ai_sql: API call → tokens={generated.input_tokens}/{generated.output_tokens}"
-                 f" cache_read={generated.cache_read_tokens}")
             store_ai_sql(question, model_id, generated.sql)
 
         # 2. Validate (cheap; do this even on cache hits — the cached SQL
@@ -282,8 +335,13 @@ def _run_query(
             from_cache=ai_sql_fully_cached,
             raw_response=generated.raw_response,
         )
-        _log(f"  → SUCCESS path=ai_sql rows={result.row_count} "
-             f"db={result.duration_ms}ms cached={ai_sql_fully_cached}")
+        _log_summary(
+            question, model=model_id, status="success", path="ai_sql",
+            cached=ai_sql_fully_cached,
+            rows=result.row_count, duration_ms=result.duration_ms,
+            input_tokens=generated.input_tokens + router_tokens["input"],
+            output_tokens=generated.output_tokens + router_tokens["output"],
+        )
         return {
             "ok": True,
             "via": "ai_sql",
@@ -300,7 +358,12 @@ def _run_query(
         }
 
     except CannotAnswerError as e:
-        _log(f"  → CANNOT_ANSWER path=ai_sql detail='{e.detail or e}'")
+        _log_summary(
+            question, model=model_id, status="cannot_answer", path="ai_sql",
+            cached=sql_from_cache, detail=e.detail or str(e),
+            input_tokens=generated.input_tokens if generated else 0,
+            output_tokens=generated.output_tokens if generated else 0,
+        )
         log_nl_query(
             db_url,
             question=question,
@@ -318,7 +381,12 @@ def _run_query(
         return {"ok": False, "kind": "cannot_answer", "msg": e.detail or str(e)}
 
     except UnsafeSQLError as e:
-        _log(f"  → REJECT path=ai_sql reason='unsafe_sql: {e}'")
+        _log_summary(
+            question, model=model_id, status="unsafe", path="ai_sql",
+            cached=sql_from_cache, detail=f"unsafe_sql: {e}",
+            input_tokens=generated.input_tokens if generated else 0,
+            output_tokens=generated.output_tokens if generated else 0,
+        )
         log_nl_query(
             db_url,
             question=question,
@@ -339,7 +407,12 @@ def _run_query(
         }
 
     except QueryTimeoutError as e:
-        _log(f"  → TIMEOUT path=ai_sql")
+        _log_summary(
+            question, model=model_id, status="timeout", path="ai_sql",
+            cached=sql_from_cache,
+            input_tokens=generated.input_tokens if generated else 0,
+            output_tokens=generated.output_tokens if generated else 0,
+        )
         log_nl_query(
             db_url,
             question=question,
@@ -358,7 +431,10 @@ def _run_query(
         }
 
     except GenerationError as e:
-        _log(f"  → GEN ERROR path=ai_sql msg='{e}'")
+        _log_summary(
+            question, model=model_id, status="generation_error", path="ai_sql",
+            detail=str(e),
+        )
         log_nl_query(
             db_url, question=question, status="generation_error",
             error_message=str(e), path="ai_sql",
@@ -366,7 +442,10 @@ def _run_query(
         return {"ok": False, "kind": "generation", "msg": str(e)}
 
     except AIClientError as e:
-        _log(f"  → AI ERROR path=ai_sql msg='{e}'")
+        _log_summary(
+            question, model=model_id, status="ai_error", path="ai_sql",
+            detail=str(e),
+        )
         log_nl_query(
             db_url, question=question, status="generation_error",
             error_message=str(e), path="ai_sql",
@@ -374,7 +453,12 @@ def _run_query(
         return {"ok": False, "kind": "ai_error", "msg": str(e)}
 
     except ExecutionError as e:
-        _log(f"  → EXEC ERROR path=ai_sql msg='{e}'")
+        _log_summary(
+            question, model=model_id, status="execution", path="ai_sql",
+            cached=sql_from_cache, detail=str(e),
+            input_tokens=generated.input_tokens if generated else 0,
+            output_tokens=generated.output_tokens if generated else 0,
+        )
         log_nl_query(
             db_url,
             question=question,
@@ -400,7 +484,7 @@ def render_ask_tab(
 ) -> None:
     """Render the Ask tab. Entry point called from app.py."""
 
-    st.markdown("### Ask MarketAtlas")
+    st.markdown("### Ask AI")
     st.caption(
         "Ask questions in plain English. Queries are read-only, capped at "
         "1,000 rows, and timed out at 5 seconds."
@@ -423,56 +507,45 @@ def render_ask_tab(
     # ---- Session state init ----
     if "ask_history" not in st.session_state:
         st.session_state.ask_history = []  # newest-first list of {question, outcome}
-    if "ask_input_text" not in st.session_state:
-        st.session_state.ask_input_text = ""
+    if "_ask_pending_example" not in st.session_state:
+        st.session_state["_ask_pending_example"] = None
 
-    # If the previous run requested an input clear (after submit / "Clear
-    # history"), do it BEFORE the text_area widget renders. Streamlit forbids
-    # writing to a widget's session_state key after the widget has rendered.
-    if st.session_state.pop("_ask_clear_pending", False):
-        st.session_state.ask_input_text = ""
-
-    # ---- Example chips ----
-    # Clicking a chip writes the example directly into the text_area's
-    # session_state key BEFORE the widget renders on the next run. Streamlit
-    # ignores the `value=` parameter on a widget that already has a `key`,
-    # so we must mutate session_state[key], not a separate variable.
+    # ---- Example chips — click to run immediately ----
+    # chat_input doesn't accept programmatic prefill, so a chip click sets a
+    # "pending example" sentinel that we run later in the function (after
+    # chat_input has rendered).
     st.markdown("**Example questions:**")
     chip_cols = st.columns(2)
     for i, ex in enumerate(EXAMPLE_QUESTIONS):
         with chip_cols[i % 2]:
             if st.button(ex, key=f"ask_ex_{i}", use_container_width=True):
-                st.session_state.ask_input_text = ex
+                st.session_state["_ask_pending_example"] = ex
                 st.rerun()
 
-    # ---- Input ----
-    question = st.text_area(
-        "Your question",
-        height=80,
-        placeholder="e.g. Which Energy stocks gained more than 5% this month?",
-        key="ask_input_text",
+    # ---- Input — st.chat_input gives us Enter-to-submit natively ----
+    # Trade-off: chat_input is single-line (no Shift+Enter newline support).
+    # Custom JS to map Enter onto a text_area + button is unreliable because
+    # Streamlit's React-based button widget doesn't accept synthetic clicks
+    # consistently — only real trusted user clicks trigger the WebSocket
+    # message that runs the submit handler. chat_input bypasses this by
+    # building its own submit pipeline that responds to Enter directly.
+    _MIN_CHARS = 10
+    submitted = st.chat_input(
+        placeholder="Ask a question — e.g. \"Which Health Care S&P 500 stocks gained 10% in the last 30 days?\"",
+        max_chars=500,
+        key="ask_chat_input",
     )
 
-    # Layout: Ask is always primary; "Clear history" is user-facing; the
-    # "Clear AI cache" affordance is developer-only (toggle by launching
-    # with STREAMLIT_CLIENT_TOOLBAR_MODE=developer).
+    # Layout for the secondary action buttons (Clear history, dev-only Clear cache).
     if _DEVELOPER_MODE:
-        submit_col, clear_history_col, clear_cache_col = st.columns([2, 1, 1])
+        clear_history_col, clear_cache_col = st.columns([1, 1])
     else:
-        submit_col, clear_history_col = st.columns([2, 1])
+        clear_history_col = st.container()
         clear_cache_col = None
 
-    with submit_col:
-        submit = st.button(
-            "Ask",
-            type="primary",
-            disabled=not question.strip(),
-            use_container_width=True,
-        )
     with clear_history_col:
         if st.button("Clear history", use_container_width=True):
             st.session_state.ask_history = []
-            st.session_state["_ask_clear_pending"] = True
             st.rerun()
     if clear_cache_col is not None:
         with clear_cache_col:
@@ -490,17 +563,25 @@ def render_ask_tab(
                 clear_ai_cache()
                 st.rerun()
 
-    # ---- Run query ----
-    if submit and question.strip():
-        with st.spinner("Generating query..."):
-            outcome = _run_query(
-                question.strip(), ai_client, db_url_readonly, db_url
+    # ---- Run query — either chat_input submission or chip click ----
+    # chat_input returns the submitted text on the rerun after Enter,
+    # otherwise None. Chip clicks set _ask_pending_example for one rerun.
+    pending = submitted or st.session_state.pop("_ask_pending_example", None)
+    if pending:
+        trimmed = pending.strip()
+        if len(trimmed) < _MIN_CHARS:
+            st.warning(
+                f"Please ask a longer question (at least {_MIN_CHARS} characters)."
             )
-        st.session_state.ask_history.insert(
-            0, {"question": question.strip(), "outcome": outcome}
-        )
-        st.session_state["_ask_clear_pending"] = True
-        st.rerun()
+        else:
+            with st.spinner("Asking AI..."):
+                outcome = _run_query(
+                    trimmed, ai_client, db_url_readonly, db_url
+                )
+            st.session_state.ask_history.insert(
+                0, {"question": trimmed, "outcome": outcome}
+            )
+            st.rerun()
 
     # ---- Render history (newest first, max 10) ----
     if st.session_state.ask_history:
@@ -510,22 +591,39 @@ def render_ask_tab(
 
 
 def _render_history_entry(entry: dict, idx: int) -> None:
+    """
+    User-facing rendering. End users see only:
+      - their question
+      - the data table (or a friendly error)
+      - row count and timing
+
+    Developer mode (STREAMLIT_CLIENT_TOOLBAR_MODE=developer) additionally
+    surfaces: routing path, template name, SQL, bound params, token usage.
+    Implementation details (queries, SQL, "AI-SQL", template names) are not
+    exposed to end users.
+    """
     with st.container(border=True):
         st.markdown(f"**Q:** {entry['question']}")
         outcome = entry["outcome"]
 
         if outcome["ok"]:
             r = outcome["result"]
-            via = outcome.get("via", "ai_sql")
             cached = outcome.get("from_cache", False)
-            badge = (
-                f"via template · `{outcome['template_name']}`"
-                if via == "template"
-                else "via AI-SQL"
-            )
-            if cached:
-                badge += " · cached (no API call)"
-            st.caption(badge)
+
+            # Dev-only: which path served this query
+            if _DEVELOPER_MODE:
+                via = outcome.get("via", "ai_sql")
+                badge = (
+                    f"via template · `{outcome['template_name']}`"
+                    if via == "template"
+                    else "via AI-SQL"
+                )
+                if cached:
+                    badge += " · cached (no API call)"
+                st.caption(badge)
+            elif cached:
+                # End users still get a small "instant" hint when no API was hit
+                st.caption("instant response (no AI call)")
 
             df = pd.DataFrame(r.rows, columns=r.columns)
             st.dataframe(df, use_container_width=True, hide_index=True)
@@ -533,49 +631,64 @@ def _render_history_entry(entry: dict, idx: int) -> None:
             meta_parts = [f"{r.row_count} rows", f"{r.duration_ms} ms"]
             if r.truncated:
                 meta_parts.append("truncated to 1000")
-            tokens = outcome.get("tokens") or {}
-            if tokens.get("cache_read", 0) > 0:
-                meta_parts.append(f"cached {tokens['cache_read']} tok")
+            if _DEVELOPER_MODE:
+                tokens = outcome.get("tokens") or {}
+                if tokens.get("cache_read", 0) > 0:
+                    meta_parts.append(f"cached {tokens['cache_read']} tok")
             st.caption(" · ".join(meta_parts))
 
-            sql_label = (
-                "Show template SQL + bound params"
-                if via == "template"
-                else "Show generated SQL"
-            )
-            with st.expander(sql_label):
-                st.code(outcome["sql"], language="sql")
-                if via == "template" and outcome.get("template_params"):
-                    st.markdown("**Bound parameters:**")
-                    st.json(outcome["template_params"])
+            # Dev-only: technical details (SQL + bound params)
+            if _DEVELOPER_MODE:
+                via = outcome.get("via", "ai_sql")
+                label = (
+                    "Show template SQL + bound params"
+                    if via == "template"
+                    else "Show generated SQL"
+                )
+                with st.expander(label):
+                    st.code(outcome["sql"], language="sql")
+                    if via == "template" and outcome.get("template_params"):
+                        st.markdown("**Bound parameters:**")
+                        st.json(outcome["template_params"])
         else:
             kind = outcome["kind"]
             if kind == "cannot_answer":
                 st.info(
-                    f"This question can't be answered from the available data. "
+                    f"AI couldn't answer this from the available data. "
                     f"{outcome['msg']}"
                 )
             elif kind == "unsafe":
                 st.error(
-                    f"The generated query was rejected for safety: {outcome['msg']}"
+                    "Could not generate a safe AI response. Please rephrase "
+                    "your question."
                 )
-                if outcome.get("sql"):
+                if _DEVELOPER_MODE and outcome.get("sql"):
                     with st.expander("Show generated SQL (rejected)"):
                         st.code(outcome["sql"], language="sql")
+                    st.caption(f"Detail: {outcome['msg']}")
             elif kind == "timeout":
                 st.warning(
-                    "Query took longer than 5 seconds and was cancelled. "
+                    "AI response took too long and was cancelled. "
                     "Try narrowing the date range or filtering by sector."
                 )
-                if outcome.get("sql"):
+                if _DEVELOPER_MODE and outcome.get("sql"):
                     with st.expander("Show generated SQL"):
                         st.code(outcome["sql"], language="sql")
             elif kind == "execution":
-                st.error(f"Query execution failed: {outcome['msg']}")
-                if outcome.get("sql"):
-                    with st.expander("Show generated SQL"):
-                        st.code(outcome["sql"], language="sql")
+                st.error("Could not retrieve data for this question.")
+                if _DEVELOPER_MODE:
+                    if outcome.get("sql"):
+                        with st.expander("Show generated SQL"):
+                            st.code(outcome["sql"], language="sql")
+                    st.caption(f"Detail: {outcome['msg']}")
             elif kind in ("generation", "ai_error"):
-                st.error(f"Could not generate a query: {outcome['msg']}")
+                st.error(
+                    "Could not generate an AI response. "
+                    "Please try rephrasing your question."
+                )
+                if _DEVELOPER_MODE:
+                    st.caption(f"Detail: {outcome['msg']}")
             else:
-                st.error(f"Something went wrong: {outcome['msg']}")
+                st.error("Something went wrong. Please try again.")
+                if _DEVELOPER_MODE:
+                    st.caption(f"Detail: {outcome['msg']}")

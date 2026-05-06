@@ -20,8 +20,17 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
+
+
+# Developer-only sidebar/UI affordances are gated behind the same env var
+# that controls Streamlit's full toolbar (.streamlit/config.toml has
+# `toolbarMode = "minimal"` for end users). Launch with:
+#
+#   STREAMLIT_CLIENT_TOOLBAR_MODE=developer streamlit run src/dashboard/app.py
+_DEVELOPER_MODE = os.environ.get("STREAMLIT_CLIENT_TOOLBAR_MODE") == "developer"
 
 import streamlit as st
 import streamlit.components.v1 as st_components
@@ -520,6 +529,14 @@ def main() -> None:
           0%   { transform: translateX(-260px); }
           100% { transform: translateX(0); }
         }
+
+        /* Hide the chat_input character counter — Streamlit positions it
+           directly under the send-icon button where it's invisible, and
+           the count itself isn't useful enough to be worth repositioning.
+           The 500-char `max_chars` server-side limit still applies. */
+        [data-testid="InputInstructions"] {
+          display: none !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -667,17 +684,17 @@ def main() -> None:
     size_by = "dollar_volume"
 
     # -----------------------------------------------------------------------
-    # Sidebar — cache stats + clear
+    # Sidebar — cache stats (always visible) + dev-only clear button
     # -----------------------------------------------------------------------
     cache_size = 24
     st.sidebar.subheader("Cache")
-    # --- Clear cache button (hidden; uncomment to re-enable) ---
-    # if st.sidebar.button("Clear cached results"):
-    #     _get_session_cache().clear()
-    #     _get_ohlcv_cache().clear()
-    #     st.session_state["treemap_cache_hits"]   = 0
-    #     st.session_state["treemap_cache_misses"] = 0
-    #     st.sidebar.success("Cleared cache")
+    if _DEVELOPER_MODE:
+        if st.sidebar.button("Clear cached results"):
+            _get_session_cache().clear()
+            _get_ohlcv_cache().clear()
+            st.session_state["treemap_cache_hits"]   = 0
+            st.session_state["treemap_cache_misses"] = 0
+            st.sidebar.success("Cleared cache")
     _tm_hits   = st.session_state.get("treemap_cache_hits",   0)
     _tm_misses = st.session_state.get("treemap_cache_misses", 0)
     _tm_slots  = len(_get_session_cache())
@@ -709,7 +726,7 @@ def main() -> None:
     # Session-state buttons replace st.tabs, which resets to tab 0 on every
     # full page rerun in Streamlit 1.53 (key= parameter not supported).
     # -----------------------------------------------------------------------
-    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap", "Ask"]
+    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap", "Ask AI"]
     if "active_tab" not in st.session_state:
         st.session_state["active_tab"] = "Heatmap"
 
@@ -766,7 +783,7 @@ def main() -> None:
     elif _active_tab == "Index Overlap":
         render_index_overlap_tab(db_url)
 
-    elif _active_tab == "Ask":
+    elif _active_tab == "Ask AI":
         render_ask_tab(
             ai_client=ai_client,
             db_url_readonly=db_url_readonly,

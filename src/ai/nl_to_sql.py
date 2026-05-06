@@ -244,6 +244,22 @@ SELECT 'CANNOT_ANSWER' AS reason,
        'fundamentals data (P/E, EPS, market cap) is not in this database' AS detail;
 </sql>
 </example>
+
+<example>
+<question>is this a legit question?</question>
+<sql>
+SELECT 'CANNOT_ANSWER' AS reason,
+       'meta-question — please ask about stock data (e.g. returns, volume, sectors, index membership)' AS detail;
+</sql>
+</example>
+
+<example>
+<question>hello</question>
+<sql>
+SELECT 'CANNOT_ANSWER' AS reason,
+       'not a data question — ask about stock returns, volume, sectors, or index membership' AS detail;
+</sql>
+</example>
 """
 
 
@@ -269,6 +285,12 @@ ABSOLUTE RULES (never violate these):
    when joining.
 8. If the question cannot be answered from this schema, output:
    <sql>SELECT 'CANNOT_ANSWER' AS reason, '<short reason>' AS detail;</sql>
+9. If the input is conversational, a greeting, a meta-question about the
+   system itself ("are you working?", "what can you do?", "is this a real
+   question?"), gibberish, or anything that isn't a request for data, ALSO
+   use the CANNOT_ANSWER pattern from rule 8 with a short detail explaining
+   what to ask instead. NEVER respond conversationally. NEVER ask for
+   clarification. Output ONLY the <sql>...</sql> block.
 
 Schema:
 {SCHEMA_DDL}
@@ -338,8 +360,18 @@ def generate_sql(client: AIClient, question: str) -> GeneratedQuery:
 
     match = _SQL_TAG.search(raw)
     if not match:
-        raise GenerationError(
-            f"no <sql> block in response (first 200 chars): {raw[:200]!r}"
+        # The model went off-script — produced prose instead of a <sql> block.
+        # Treat this the same as a CANNOT_ANSWER refusal: it's almost always
+        # because the input wasn't a data question (e.g. "hello", "is this
+        # working?"). Surface it as a CannotAnswerError so the UI shows the
+        # friendly blue info box rather than a red error.
+        raise CannotAnswerError(
+            "model produced no SQL block",
+            detail=(
+                "Try asking about stock data — e.g. "
+                "\"Which Energy stocks gained more than 5% this month?\" "
+                "or \"Average daily volume for AAPL over 90 days\"."
+            ),
         )
     sql = match.group(1).strip()
 
