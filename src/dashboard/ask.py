@@ -110,20 +110,30 @@ def _log_summary(
 
 
 def _attach_narrative(
-    outcome: dict, ai_client: AIClient, question: str
+    outcome: dict,
+    ai_client: AIClient,
+    question: str,
+    *,
+    last_ticker: str | None = None,
 ) -> dict:
     """
     Best-effort one-liner summary attached to a successful outcome. Mutates
     and returns the same dict so callers can `return _attach_narrative(...)`
     inline. Failures (API down, empty rows beyond the empty handling in
     narrate.summarize) leave the outcome unchanged.
+
+    `last_ticker` is the prior conversational anchor — passed through so
+    the narrator can resolve "it" / "that stock" even when the SQL result
+    columns don't include the symbol.
     """
     if not outcome.get("ok"):
         return outcome
     r = outcome.get("result")
     if r is None:
         return outcome
-    narration = narrate_result(ai_client, question, r.columns, r.rows)
+    narration = narrate_result(
+        ai_client, question, r.columns, r.rows, last_ticker=last_ticker
+    )
     if narration is None:
         return outcome
     text, tokens = narration
@@ -249,7 +259,7 @@ def _run_query(
                     "cache_read": routing.cache_read_tokens,
                     "cache_creation": routing.cache_creation_tokens,
                 },
-            }, ai_client, question)
+            }, ai_client, question, last_ticker=last_ticker)
         except TemplateError as e:
             # Param mismatch from the router (e.g. unknown sector). Don't
             # fall through to AI-SQL — the model already chose this template,
@@ -387,7 +397,7 @@ def _run_query(
                 "cache_read": generated.cache_read_tokens + router_tokens["cache_read"],
                 "cache_creation": generated.cache_creation_tokens + router_tokens["cache_creation"],
             },
-        }, ai_client, question)
+        }, ai_client, question, last_ticker=last_ticker)
 
     except CannotAnswerError as e:
         _log_summary(

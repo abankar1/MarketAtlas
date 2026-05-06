@@ -75,9 +75,17 @@ def _serialise(columns: list[str], rows: list[tuple]) -> str:
     return json.dumps(payload, default=str)
 
 
-def _key(question: str, columns: list[str], rows: list[tuple]) -> str:
+def _key(
+    question: str,
+    columns: list[str],
+    rows: list[tuple],
+    *,
+    last_ticker: str | None = None,
+) -> str:
     h = hashlib.sha1()
     h.update(question.strip().lower().encode())
+    h.update(b"|")
+    h.update((last_ticker or "").upper().encode())
     h.update(b"|")
     h.update(",".join(columns).encode())
     h.update(b"|")
@@ -93,9 +101,15 @@ def summarize(
     question: str,
     columns: list,
     rows: list,
+    *,
+    last_ticker: str | None = None,
 ) -> tuple[str, dict] | None:
     """
     Return (narrative, token_usage_dict) or None on failure.
+
+    `last_ticker` is the conversational anchor from the prior query — when
+    present, the narrator can resolve referential pronouns ("it", "that
+    stock") even if the SQL result columns don't include the symbol.
 
     Never raises — narration is best-effort. The dataframe still renders
     if this call fails, and the user just doesn't get the one-liner.
@@ -106,13 +120,17 @@ def summarize(
     if not row_list:
         return ("No rows matched.", {"input": 0, "output": 0, "cached": True})
 
-    key = _key(question, cols, row_list)
+    key = _key(question, cols, row_list, last_ticker=last_ticker)
     cached = _NARRATE_CACHE.get(key)
     if cached is not None:
         return (cached, {"input": 0, "output": 0, "cached": True})
 
+    context_line = (
+        f"Previously discussed ticker: {last_ticker}\n"
+        if last_ticker else ""
+    )
     user_payload = (
-        f"Question: {question}\n\n"
+        f"{context_line}Question: {question}\n\n"
         f"Result data:\n{_serialise(cols, row_list)}"
     )
 

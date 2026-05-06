@@ -124,6 +124,14 @@ ABSOLUTE RULES:
    If the new question names ANY ticker, company, sector, or index, ignore
    the previous context. Never bind the previous ticker into a template
    that operates over a sector or index instead of a single symbol.
+8. RELEVANCE OVER ELIGIBILITY: Match a template ONLY when its OUTPUT
+   directly answers what the user asked. If the question is about price,
+   return, performance, highs/lows, or "doing better/worse" and the
+   only candidate template returns just volume (or vice versa), output
+   {{"template": null}} — the AI-SQL fallback will write a query that
+   actually answers the question. Do not stretch a template just because
+   one of its params (e.g. `days`) happens to fit a phrase in the
+   question.
 
 Available index-key mapping (string → INDEX_KEYS):
   S&P 500          → "sp500"
@@ -177,6 +185,17 @@ Examples:
 
 <example>
 <question>Highest closing price for AAPL in 2024</question>
+<json>{{"template": null}}</json>
+</example>
+
+<example>
+<question><previous_context>previously discussed ticker: GOOGL</previous_context>
+has it been any better in the last year?</question>
+<json>{{"template": null}}</json>
+</example>
+
+<example>
+<question>How is AAPL doing this year?</question>
 <json>{{"template": null}}</json>
 </example>
 """
