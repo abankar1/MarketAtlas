@@ -213,6 +213,18 @@ def main() -> None:
         .stMetric { padding: 0.25rem 0.5rem; }
         .stSidebar .block-container { padding-top: 0.75rem; }
 
+        /* Mover-strip: pull ticker cards close to the "Top 5" caption. */
+        [data-testid="stCaptionContainer"] p {
+          margin-bottom: 0 !important;
+        }
+        [data-testid="stElementContainer"]:has(div[data-mover-strip="true"]) {
+          margin-top: -0.5rem !important;
+        }
+        [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+          + [data-testid="stLayoutWrapper"] {
+          margin-top: -0.5rem !important;
+        }
+
         /* ---------- Mobile (≤640px) ---------- */
         @media (max-width: 640px) {
           /* Pin title into the 60px Streamlit header on mobile.
