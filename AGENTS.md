@@ -26,7 +26,15 @@ repo root/
 │   │   └── settings.py                 # loads config, exposes Settings dataclass
 │   ├── db/
 │   │   ├── connection.py               # psycopg.connect() wrapper
-│   │   └── repositories.py             # all SQL — upserts, fetches, OHLCV query
+│   │   ├── readonly.py                 # sqlglot validator + readonly executor (Ask tab)
+│   │   └── repositories.py             # all SQL — upserts, fetches, OHLCV query, nl_queries log
+│   ├── ai/
+│   │   ├── __init__.py
+│   │   ├── client.py                   # Anthropic Messages API wrapper (httpx)
+│   │   ├── query_templates.py          # pre-approved SQL templates + render() (Ask tab primary path)
+│   │   ├── intent_router.py            # Claude call: question → template name + params (Ask tab primary path)
+│   │   ├── nl_to_sql.py                # free-form NL → SQL fallback (Ask tab fallback path)
+│   │   └── cache.py                    # process-wide LRU+TTL cache for question → AI decision
 │   ├── marketdata/
 │   │   └── client.py                   # Marketstack REST client
 │   ├── services/
@@ -43,19 +51,23 @@ repo root/
 │   │   ├── heatmap.py                  # Heatmap tab renderer + CSV export
 │   │   ├── sector_synopsis.py          # Sector Synopsis tab renderer
 │   │   ├── stock_detail.py             # Stock Detail tab renderer + CSV export + badges
-│   │   └── index_overlap.py            # Index Overlap tab renderer
+│   │   ├── index_overlap.py            # Index Overlap tab renderer
+│   │   └── ask.py                      # Ask tab — route → template render OR fallback NL→SQL → dataframe
 │   ├── load_sectors.py                 # CLI: apply/check/export gics_sectors.json
 │   ├── sync_constituents.py            # CLI: standalone constituent sync
 │   └── main.py                         # CLI: daily orchestrator (sync + prices)
 ├── data/
 │   └── gics_sectors.json               # static {symbol: gics_sector} map (532 symbols)
 ├── docs/
-│   ├── user-guide.md                   # end-user guide for the dashboard
+│   ├── user-guide.md                   # End-user dashboard guide
 │   └── timescaledb-cheatsheet.md       # TimescaleDB SQL reference
+├── tests/
+│   ├── test_validate_sql.py            # SQL validator safety tests
+│   └── test_nl_to_sql_parsing.py       # response-parsing tests
 ├── AGENTS.md                           # this file
 └── readme.md                           # human-facing setup guide
-# scripts/ is gitignored — operator-only utilities (pg_dump backups, DB
-# migration SQL with credentials) live there but are not part of the repo.
+# scripts/ is gitignored — operator-only files (DB setup SQL with passwords,
+# migrations, backup helpers) live there but are not part of the published repo.
 ```
 
 ---
@@ -67,15 +79,21 @@ File: `src/config/configuration.json`
 ```json
 {
   "db_url": "postgresql://user:pass@host:port/dbname",
+  "db_url_readonly": "postgresql://marketatlas_reader:...@host:port/dbname",
   "marketdata_token": "your_marketstack_key",
   "days": 1000,
   "api_sleep_seconds": 0.5,
-  "anthropic_api_key": "optional — only used for AI sector classification"
+  "anthropic_api_key": "required for the Ask tab; also used for AI sector classification",
+  "anthropic_model": "claude-haiku-4-5",
+  "marketaux_token": "optional — News tab headlines"
 }
 ```
 
 Loaded by `src/config/settings.py` → `load_settings()` returns a `Settings` object.  
 Field names matter: use `db_url` and `marketdata_token` — not `database_url` or `marketstack_access_key`.
+
+`db_url_readonly` is the connection string for the `marketatlas_reader` Postgres
+role used by the Ask tab to execute AI-generated SQL. See `scripts/setup_readonly_role.sql`.
 
 The dashboard searches four candidate paths for config (in order):
 1. `src/config/config.json`
@@ -145,6 +163,30 @@ WHERE is_active IS NOT FALSE
 ```
 This pattern (not `= TRUE`) handles NULL values in legacy rows that predate the column.
 
+### `public.nl_queries`
+Audit log for the Ask tab. One row per natural-language question, success or failure.
+
+| Column                  | Type        | Notes                                       |
+|-------------------------|-------------|---------------------------------------------|
+| id                      | BIGSERIAL PK |                                            |
+| ts                      | TIMESTAMPTZ | DEFAULT NOW()                               |
+| question                | TEXT        | Raw user input                              |
+| generated_sql           | TEXT        | Rendered template SQL or AI-generated SQL; NULL if generation failed |
+| status                  | TEXT        | success / unsafe_sql / timeout / cannot_answer / generation_error / execution_error / config_error |
+| error_message           | TEXT        |                                             |
+| row_count               | INTEGER     |                                             |
+| duration_ms             | INTEGER     |                                             |
+| input_tokens            | INTEGER     | Total across router + (if invoked) AI-SQL generator |
+| output_tokens           | INTEGER     |                                             |
+| cache_read_tokens       | INTEGER     | Prompt cache hits                           |
+| cache_creation_tokens   | INTEGER     | Prompt cache writes                         |
+| path                    | TEXT        | `'template'` or `'ai_sql'` — which path served the question |
+| template_name           | TEXT        | Matched template (e.g. `'sector_count_by_index'`); NULL on AI-SQL path |
+| template_params         | JSONB       | Bound parameter dict for replay; NULL on AI-SQL path |
+
+Created by `scripts/create_nl_queries_table.sql` then extended by `scripts/add_path_to_nl_queries.sql`.
+Indexed on `ts DESC`, `status`, `path`, and `template_name`.
+
 ---
 
 ## Data Flow
@@ -202,6 +244,7 @@ The dashboard is split into one entry-point module and six supporting modules:
 | `sector_synopsis.py` | `render_sector_synopsis_tab` (entry point) + `render_sector_synopsis` (`@st.fragment`) |
 | `stock_detail.py` | `render_stock_detail` (`@st.fragment`) — symbol picker, index membership badges, candlestick chart, OHLCV CSV export |
 | `index_overlap.py` | `render_index_overlap_tab` — headline counts, cross-membership bar chart, per-bucket symbol tables |
+| `ask.py` | `render_ask_tab` — natural-language input → Claude generates SQL → `validate_sql` → `execute_safe` on the readonly role → render dataframe. Falls back to a warning if `anthropic_api_key` or `db_url_readonly` is unconfigured. |
 
 ### Tab Navigation
 
@@ -209,7 +252,7 @@ Tabs are implemented as three `st.button` widgets backed by `session_state["acti
 This replaces `st.tabs`, which resets to tab 0 on every full page rerun in Streamlit 1.53.
 
 ```python
-_TABS = ["Heatmap", "Sector Synopsis", "Stock Detail"]
+_TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap", "Ask"]
 # Buttons use type="primary"/"secondary" based on active_tab.
 # _on_tab_click callback sets session_state["active_tab"] before the rerun.
 ```
@@ -449,6 +492,52 @@ Fragment parameters are passed by the full-page render and are frozen for the li
 10. **Date inputs use `key=` with pre-widget clamping.** `key="date_from"` / `key="date_to"` make widget state and session_state the same object — manual changes apply immediately (no "two-click" lag). Session_state values are clamped to the available data range *before* the widgets render; writing to `session_state[key]` after the widget is rendered raises `StreamlitAPIException`. Preset-button `on_click` callbacks run before the rerun so the widget picks up the preset dates correctly.
 
 11. **CSV export is rate-limited to 3 calendar months.** Both the Heatmap and Stock Detail download buttons are disabled when `date_to > date_from + 3 calendar months`. The check is calendar-month-aware (not a flat 90-day count): `_exceeds_three_months(d_from, d_to)` in `heatmap.py` and `stock_detail.py`.
+
+12. **AI-generated SQL runs ONLY on the readonly role.** `db_url_readonly` is a separate Postgres role (`marketatlas_reader`) with `SELECT`-only privileges, `statement_timeout=5s` set at the role level, and an explicit `SET TRANSACTION READ ONLY` per query. Audit log writes use `db_url` (the primary role) because the readonly role has no INSERT privilege.
+
+13. **SQL validation uses sqlglot, not regex.** `validate_sql` parses the AST and walks every node, rejecting any non-SELECT/WITH/UNION/INTERSECT/EXCEPT statement type *anywhere in the tree* (catches DML embedded in CTEs, e.g., `WITH d AS (DELETE FROM x RETURNING *) SELECT ...`), plus a deny-list of forbidden function names (`pg_read_file`, `pg_sleep`, `dblink`, `pg_terminate_backend`, …). Multi-statement input (semicolon-separated) is rejected before parsing.
+
+14. **System prompts are cached via `cache_control: ephemeral`.** The NL-to-SQL system prompt is ~7.5k chars (≈ 2-3k tokens); caching drops repeat-call cost to ~10% of cold cost within a 5-minute window. The user question is passed in the `messages` array — never interpolated into the system prompt — so the cache prefix stays byte-identical across calls.
+
+15. **Templates are the primary path; AI-SQL is the fallback.** Operators should grow the registry in `src/ai/query_templates.py` rather than relying on the model writing SQL. The model never sees template SQL bodies — its job in the template path is intent classification + parameter extraction only. Numeric params are inlined into SQL only after a strict type+range check; string/date params are bound by psycopg.
+
+16. **A template's parameter surface is its safety contract.** Adding a new param: declare a `ParamSpec` with `choices` (allowlist) for enums, `min`/`max` for numerics, or `pattern` for strings. The `render()` helper rejects anything outside the spec before any SQL is sent to the DB.
+
+17. **The Ask tab caches LLM decisions, never DB results.** `src/ai/cache.py` holds two LRU+TTL caches keyed on `(model_id, normalised_question)` — one for router decisions (template name + params, or `miss`), one for AI-SQL fallback strings. Templates re-execute against current DB state every time, so cached routing for "last 30 days" gives a different answer tomorrow (CURRENT_DATE in the SQL handles it). Caching is an optimisation, not a source of truth — clearable via the "Clear AI cache" button or `clear_all()`. Errors are not cached.
+
+---
+
+## AI Layer
+
+Claude integration is organized under `src/ai/`:
+
+- `client.py` — `AIClient` wrapping the Anthropic Messages API via `httpx`. Supports prompt caching via `cacheable_system=True` (marks the system block with `cache_control={"type": "ephemeral"}`). Returns `AIResponse` with input/output/cache token counts.
+- `query_templates.py` — registry of **pre-approved parameterized SQL templates** (the Ask tab primary path). Each `QueryTemplate` declares a `name`, `description`, `sql` (with psycopg `%(name)s` placeholders for strings/dates and `{name}` placeholders for ints/floats), a typed `ParamSpec` per param (allowlist for sectors / indices, min/max for numerics, regex for symbols), and 1-3 NL examples. `render(template_name, params)` validates every param then returns `(sql, bound_params)`. Module import runs every template through sqlglot to catch authoring bugs at startup.
+- `intent_router.py` — single Claude call that maps a question to either a template name + extracted params, or `null` (no match). The model **never sees the SQL bodies of templates** — only their names, descriptions, and NL examples. Output is JSON wrapped in `<json>...</json>` tags. `parse_routing_response(...)` validates structure and rejects unknown template names.
+- `nl_to_sql.py` — free-form NL→SQL **fallback** generator (used only when the router returns `null`). Holds the system prompt with schema DDL + 11-sector GICS enum + 8 few-shot examples including a CANNOT_ANSWER refusal.
+- `cache.py` — process-wide LRU+TTL cache (12h TTL, 200 entries each) for two surfaces: (a) the router's decision (`{template, params}` or `miss`) and (b) the AI-SQL generator's output SQL. Keys are `(model_id, normalised_question)`. Repeat questions skip the API call entirely; cached entries log `input_tokens=0` so audit reports show free queries clearly. The cache holds *only* the LLM's decision — actual SQL still runs against current DB state every time, so daily price/volume changes are picked up. Templates use `CURRENT_DATE` in their SQL, so a cached "30 days" routing today gives a different result tomorrow.
+
+The Ask tab orchestrator (`src/dashboard/ask.py::_run_query`):
+
+1. **Route** — `intent_router.route(client, question)` → `RoutedTemplate` or `RoutingMiss`.
+2. **Template path** (`RoutedTemplate`):
+   a. `query_templates.render(name, params)` validates params, returns `(sql, bound_params)`.
+   b. `execute_safe(db_url_readonly, sql, bound_params=...)` runs on the readonly role.
+   c. `log_nl_query(..., path='template', template_name=..., template_params=...)`.
+3. **AI-SQL fallback** (`RoutingMiss`):
+   a. `generate_sql(client, question)` (raises `CannotAnswerError` / `GenerationError`).
+   b. `validate_sql(sql)` (sqlglot — raises `UnsafeSQLError`).
+   c. `execute_safe(db_url_readonly, sql)`.
+   d. `log_nl_query(..., path='ai_sql')`. Token counts include the router's tokens plus the generator's.
+
+Adding a new template:
+- Append a `QueryTemplate(...)` to `TEMPLATES` in `query_templates.py`.
+- Numeric params get `{name}` placeholders (inlined after type+range check).
+- String/date params get `%(name)s` placeholders (psycopg-bound).
+- Provide 1-3 `nl_examples` — those are the router's primary signal.
+- The `_check_template` self-check at module import will refuse to start if any `{placeholder}` or `%(placeholder)s` is undeclared.
+
+Future AI features (daily briefs, sector narratives, "explain this move") will reuse `AIClient` and add their own modules under `src/ai/`.
 
 ---
 
