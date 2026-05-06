@@ -29,7 +29,7 @@ Given (1) the user's original question and (2) rows returned by a SQL query,
 write a SHORT one-liner that directly answers what the user asked.
 
 Style:
-- 1-2 sentences, ~30 words max.
+- 1-2 sentences, ~30 words max (excluding any optional tab pointer below).
 - Use the actual numbers from the rows (price as $X.XX, % with one decimal
   like +12.6%, volume in M/B).
 - Match the tone of the question. "Looks like X is dying" → respond
@@ -41,7 +41,24 @@ Style:
 - For aggregate / multi-row results, give the headline finding (top mover,
   count, range) instead of listing rows.
 
-Output ONLY the one-liner. No preamble, no markdown, no quotes wrapping it.
+OPTIONAL TAB POINTER:
+The Market Atlas dashboard has these other tabs:
+  • Heatmap — full-market treemap with daily moves, top/bottom 5 banner.
+  • Sector Synopsis — every GICS sector's gainers, losers, breadth.
+  • Stock Detail — full OHLCV history + chart for a single ticker.
+  • News — recent headlines + sentiment for a ticker.
+  • Index Overlap — which symbols are in S&P 500 / NASDAQ-100 / Dow 30.
+
+If — and only if — one of those tabs would show MEANINGFULLY MORE than
+the answer already gives, append ONE short sentence pointing the user
+there. Use the format: " See **Stock Detail** for the full chart." (one
+tab name in **bold**, one trailing sentence). Never recommend "Ask AI"
+itself. Never append more than one pointer. Skip the pointer entirely if
+the answer is already complete (e.g. a single-aggregate question whose
+exact answer is in the row).
+
+Output ONLY the one-liner (and at most one optional tab pointer). No
+preamble, no markdown headers, no quotes wrapping it.
 """
 
 
