@@ -19,7 +19,7 @@ Market Atlas is a data-driven platform that:
 - **Python 3.11+**
 - **PostgreSQL 14+** with the **TimescaleDB extension** installed
   - macOS: `brew install timescaledb` then follow post-install steps
-  - See `TimescaleDbCheatsheet.txt` for hypertable setup, compression, and retention policies
+  - See [docs/timescaledb-cheatsheet.md](docs/timescaledb-cheatsheet.md) for hypertable setup, compression, and retention policies
 - A [Marketstack](https://marketstack.com) API access key (`marketdata_token`)
 - *(Optional)* A [Marketaux](https://www.marketaux.com) API key (`marketaux_token`) — enables the News tab (free tier: 100 requests/day)
 - *(Optional)* An [Anthropic](https://console.anthropic.com) API key (`anthropic_api_key`) — used for AI-based GICS sector classification of new stocks
@@ -75,10 +75,59 @@ Edit `src/config/configuration.json`:
 ## Database Setup
 
 Ensure TimescaleDB is running and the required tables exist before running any importers.
-See `TimescaleDbCheatsheet.txt` for the full SQL to:
+See [docs/timescaledb-cheatsheet.md](docs/timescaledb-cheatsheet.md) for the full SQL to:
 - Create `assets`, `daily_bars`, `sp500_constituents`, `nasdaq100_constituents`, `dow30_constituents`
 - Convert `daily_bars` to a hypertable
 - Set retention/compression policies
+
+---
+
+## Ask tab setup (one-time)
+
+The Ask tab requires a separate read-only Postgres role and an audit log table.
+
+1. Edit `scripts/setup_readonly_role.sql` and replace `CHANGE_ME_STRONG_PASSWORD`
+   with a strong password (also adjust the database name from `market_timeseries`
+   if yours differs).
+2. Run all three scripts as a DB superuser:
+   ```bash
+   psql -U postgres -d market_timeseries -f scripts/setup_readonly_role.sql
+   psql -U postgres -d market_timeseries -f scripts/create_nl_queries_table.sql
+   psql -U postgres -d market_timeseries -f scripts/add_path_to_nl_queries.sql
+   ```
+3. Add `db_url_readonly` and `anthropic_api_key` to `src/config/configuration.json`
+   (and optionally `anthropic_model`, defaults to `claude-haiku-4-5`).
+4. Restart the dashboard.
+
+How a question gets answered (hybrid template-first flow):
+
+1. **Intent routing** — Claude classifies the question against a small
+   library of pre-approved templates in [src/ai/query_templates.py](src/ai/query_templates.py)
+   and emits a JSON intent like `{"template": "sector_count_by_index", "params": {"index": "sp500"}}`.
+2. **Template path** — if a template matched, `query_templates.render()`
+   validates the params against a typed `ParamSpec` (allowlist for sectors
+   / indices, min-max for numerics, regex for symbols), binds string params
+   via psycopg, and inlines numeric params after type-checking. The model
+   never sees the SQL bodies — its only job is intent classification.
+3. **AI-SQL fallback** — if the router decides no template fits
+   (`{"template": null}`), the existing free-form generator runs:
+   Claude writes a `SELECT`, `sqlglot` validates it (rejects DML/DDL even
+   inside CTEs and a deny-list of dangerous functions), and the result
+   runs on the readonly role.
+4. **Audit log** — every question (template or AI-SQL, success or failure)
+   is recorded in `public.nl_queries` with status, row count, duration,
+   Anthropic token usage, the path taken (`'template'` vs `'ai_sql'`),
+   and (for templates) the matched template name + bound parameters as
+   JSONB for replay.
+
+Safety notes:
+- All SQL — templated or AI-generated — runs only on the `marketatlas_reader`
+  role, which has `SELECT`-only privileges and a role-level
+  `statement_timeout = 5s`.
+- Adding a new question shape means appending a new `QueryTemplate` to
+  [src/ai/query_templates.py](src/ai/query_templates.py); the import-time
+  self-check parses every template through sqlglot and aborts startup if
+  any one is malformed.
 
 ---
 
@@ -140,13 +189,14 @@ source .venv/bin/activate
 streamlit run src/dashboard/app.py
 ```
 
-Five tabs, all driven by the same sidebar filters:
+Six tabs, all driven by the same sidebar filters:
 
 - **Heatmap** — treemap tiles sized by dollar volume, colored by **percentile rank** of return % within the visible universe (Worst / Median / Best); collapsible Options panel (View toggle, sector filter, palette); top movers strip; sector parents show dollar-volume-weighted return + avg start/end close on hover
 - **Sector Synopsis** — sector breadth bar chart (click to drill in); ranked per-stock bar chart; auto-selects the top-performing sector on load
 - **Stock Detail** — full per-stock candlestick with toggleable overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI, MACD, ATR, OBV); index membership badges; Compare mode for normalized multi-symbol performance comparison (up to 5 symbols); defaults to AAPL
 - **News** — recent per-symbol headlines from [Marketaux](https://www.marketaux.com) with title, snippet, source, relative timestamp, and sentiment pill (Positive / Neutral / Negative). Symbol selection is shared with Stock Detail. Requires `marketaux_token` in config; otherwise the tab shows a setup notice.
 - **Index Overlap** — cross-membership breakdown showing how symbols are distributed across S&P 500, NASDAQ-100, and Dow 30 (exclusive / shared / all three); expandable per-bucket symbol tables
+- **Ask** — natural-language query tab. Type a question in plain English ("Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?"). Claude first tries to route the question to one of the pre-approved SQL templates in [src/ai/query_templates.py](src/ai/query_templates.py); if no template matches, it falls back to free-form `SELECT` generation. Both paths run on a separate read-only Postgres role with a 5-second statement timeout and a 1,000-row cap. Every question is logged to `nl_queries` with the path taken (`'template'` vs `'ai_sql'`). Requires `db_url_readonly` and `anthropic_api_key` in config; see the **Ask tab setup** section below.
 
 Sidebar controls:
 - Index selector: S&P 500 | NASDAQ-100 | Dow 30 | All
@@ -254,11 +304,10 @@ Market Atlas/
 │   ├── main.py                         # Daily update orchestrator
 │   └── sync_constituents.py            # Constituent sync entry point
 ├── docs/
-│   └── user-guide.md                   # Dashboard user guide
-├── scripts/
-│   └── backup_db.py                    # pg_dump + snapshot utility
-├── TimescaleDbCheatsheet.txt           # Database setup SQL + reference
+│   ├── user-guide.md                   # Dashboard user guide
+│   └── timescaledb-cheatsheet.md       # Database setup SQL + reference
 └── readme.md
+# (scripts/ is gitignored — see .gitignore)
 ```
 
 ---

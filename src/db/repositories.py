@@ -195,3 +195,77 @@ def upsert_dow_constituents(conn, rows):
         return
     with conn.cursor() as cur:
         cur.executemany(DOW_UPSERT_SQL, rows)
+
+
+# ---------------------------------------------------------------------------
+# Ask tab — natural-language query audit log
+# ---------------------------------------------------------------------------
+
+def log_nl_query(
+    db_url: str,
+    *,
+    question: str,
+    generated_sql: str | None = None,
+    status: str,
+    error_message: str | None = None,
+    row_count: int | None = None,
+    duration_ms: int | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+    path: str | None = None,                # 'template' | 'ai_sql'
+    template_name: str | None = None,       # e.g. 'sector_movers_with_min_return'
+    template_params: dict | None = None,    # bound params for replay
+    from_cache: bool = False,               # served from in-process LLM cache
+    raw_response: str | None = None,        # raw model output (router JSON or SQL block)
+) -> None:
+    """
+    Insert a row into nl_queries. Best-effort — never raises into the UI.
+
+    Uses the primary db_url (NOT db_url_readonly): the readonly role has no
+    INSERT privilege. Connection is short-lived and capped at 3s.
+    """
+    import json
+    template_params_json = (
+        json.dumps(template_params, default=str)
+        if template_params is not None
+        else None
+    )
+    try:
+        with psycopg.connect(db_url, connect_timeout=3) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO nl_queries (
+                      question, generated_sql, status, error_message,
+                      row_count, duration_ms,
+                      input_tokens, output_tokens,
+                      cache_read_tokens, cache_creation_tokens,
+                      path, template_name, template_params,
+                      from_cache, raw_response
+                    ) VALUES (
+                      %s, %s, %s, %s,
+                      %s, %s,
+                      %s, %s,
+                      %s, %s,
+                      %s, %s, %s::jsonb,
+                      %s, %s
+                    )
+                    """,
+                    (
+                        question, generated_sql, status, error_message,
+                        row_count, duration_ms,
+                        input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens,
+                        path, template_name, template_params_json,
+                        from_cache, raw_response,
+                    ),
+                )
+            conn.commit()
+    except Exception:
+        # Audit logging must never break the UI. Log to stderr if needed.
+        import sys
+        import traceback
+        print("WARNING: nl_queries logging failed:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)

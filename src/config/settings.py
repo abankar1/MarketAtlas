@@ -13,7 +13,10 @@ Required fields:
 Optional fields:
     days                Days of history to fetch on incremental updates (default 1000)
     api_sleep_seconds   Delay between Marketstack API calls (default 0.2)
-    anthropic_api_key   Anthropic API key for AI sector classification
+    anthropic_api_key   Anthropic API key for AI sector classification + Ask tab
+    anthropic_model     Claude model id for the Ask tab (default "claude-haiku-4-5")
+    db_url_readonly     Postgres connection string for the readonly role used
+                        by the Ask tab to execute AI-generated SQL
     marketaux_token     Marketaux API key for the per-symbol news feed
 
 Usage:
@@ -37,8 +40,10 @@ class Settings:
     marketdata_token: str
     days: int
     api_sleep_seconds: float
-    anthropic_api_key: str = ""  # optional — used for AI sector classification
-    marketaux_token: str = ""    # optional — used for News tab headlines
+    anthropic_api_key: str = ""           # AI sector classification + Ask tab
+    anthropic_model: str = "claude-haiku-4-5"  # Claude model id used by the Ask tab (Haiku — fastest/cheapest tier)
+    db_url_readonly: str = ""             # Readonly role for AI-generated SQL
+    marketaux_token: str = ""             # News tab headlines
 
 
 def _load_from_file() -> dict:
@@ -64,8 +69,10 @@ def load_settings() -> Settings:
             marketdata_token=cfg["marketdata_token"],
             days=int(cfg.get("days", 1000)),
             api_sleep_seconds=float(cfg.get("api_sleep_seconds", 0.2)),
-            anthropic_api_key=cfg.get("anthropic_api_key", ""),
-            marketaux_token=cfg.get("marketaux_token", ""),
+            anthropic_api_key=cfg.get("anthropic_api_key", "") or "",
+            anthropic_model=cfg.get("anthropic_model", "") or "claude-haiku-4-5",
+            db_url_readonly=cfg.get("db_url_readonly", "") or "",
+            marketaux_token=cfg.get("marketaux_token", "") or "",
         )
     except KeyError as e:
         raise RuntimeError(f"Missing required config key: {e}") from e
