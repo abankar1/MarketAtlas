@@ -20,6 +20,7 @@ env/
 
 # Credentials — NEVER commit the real config
 src/config/configuration.json
+.streamlit/secrets.toml
 
 # Operator-only ops doc — lists external service accounts, credentials,
 # billing thresholds, renewal cadences. Personal to the maintainer.
