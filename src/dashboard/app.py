@@ -58,19 +58,19 @@ from src.dashboard.stock_detail import render_stock_detail  # noqa: E402
 # Configuration
 # ---------------------------------------------------------------------------
 
-CONFIG_CANDIDATES = [
-    REPO_ROOT / "src" / "config" / "config.json",
-    REPO_ROOT / "src" / "config" / "configuration.json",
-    REPO_ROOT / "config.json",
-    REPO_ROOT / "configuration.json",
-]
-
-
 def load_config() -> dict:
-    for p in CONFIG_CANDIDATES:
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
-    return {}
+    """
+    Load config via src.config.settings.load_settings(), which checks
+    Streamlit secrets → env vars → src/config/configuration.json in priority
+    order. Returns an empty dict if nothing is configured, so the caller can
+    show a friendly st.error instead of crashing.
+    """
+    try:
+        from dataclasses import asdict
+        from src.config.settings import load_settings
+        return asdict(load_settings())
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------
