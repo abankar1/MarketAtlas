@@ -500,19 +500,34 @@ _CANNOT_ANSWER = re.compile(r"CANNOT_ANSWER", re.IGNORECASE)
 _SYMBOL_LITERAL = re.compile(r"symbol\s*=\s*'([A-Z0-9.\-]{1,10})'", re.IGNORECASE)
 
 
-def _with_context(question: str, last_ticker: str | None) -> str:
+def _with_context(
+    question: str,
+    last_ticker: str | None,
+    recent_turns: tuple | list | None = None,
+) -> str:
     """
-    Prepend a one-line context preamble when we have a remembered ticker.
-    The model is instructed (rule 12 in SYSTEM_PROMPT) to use it ONLY when
-    the new question is referential ("what about volume?", "and the highs?")
-    and contains no ticker of its own.
+    Prepend a context preamble when we have remembered context.
+
+    Two layers of context (both optional, can co-exist):
+      - `recent_turns`: a sliding window of the last few user questions
+        and the symbols/summary each returned. The model uses this to
+        resolve referential follow-ups like "their names", "the top 3",
+        "what about volume?" — handles multi-symbol previous results that
+        leave `last_ticker` empty.
+      - `last_ticker`: a single anchor symbol from the immediately prior
+        single-stock query. Lets the model bind a remembered ticker into a
+        new question that has none (rule 12 in SYSTEM_PROMPT).
     """
-    if not last_ticker:
-        return question
-    return (
+    from src.ai.memory import format_transcript  # avoid circular import
+
+    transcript = format_transcript(recent_turns)
+    ticker_line = (
         f"<previous_context>previously discussed ticker: {last_ticker}</previous_context>\n"
-        f"{question}"
+        if last_ticker else ""
     )
+    if not transcript and not ticker_line:
+        return question
+    return (transcript + "\n" if transcript else "") + ticker_line + question
 
 
 def extract_single_ticker(sql: str) -> str | None:
@@ -535,6 +550,7 @@ def generate_sql(
     question: str,
     *,
     last_ticker: str | None = None,
+    recent_turns: tuple | list | None = None,
 ) -> GeneratedQuery:
     """
     Generate a SQL query from a natural-language question.
@@ -545,6 +561,11 @@ def generate_sql(
     model is told to use it only when the new question has no ticker of
     its own and is clearly referential — explicit tickers always override.
 
+    `recent_turns` carries forward the last few user turns + the symbols
+    each query returned, so referential follow-ups like "their names" or
+    "drop the bottom 3" resolve when the previous result was multi-symbol
+    (which clears `last_ticker`).
+
     Raises CannotAnswerError if the model declines.
     Raises GenerationError if the output cannot be parsed.
     """
@@ -552,7 +573,7 @@ def generate_sql(
     if not question:
         raise GenerationError("empty question")
 
-    user_message = _with_context(question, last_ticker)
+    user_message = _with_context(question, last_ticker, recent_turns)
 
     response = client.complete(
         system=SYSTEM_PROMPT,

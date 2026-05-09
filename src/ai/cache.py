@@ -132,7 +132,12 @@ _AI_SQL_CACHE = TTLCache()
 #   v3 (2026-05-09): narrate prompt now refers to "tabs" explicitly
 #       (e.g. "See the **Stock Detail** tab"); Index Overlap removed from
 #       the tab list since that tab is hidden from the strip.
-PROMPT_VERSION = "v3"
+#   v4 (2026-05-09): conversational memory — last few turns are now
+#       injected into router/SQL/narrate prompts so referential follow-ups
+#       resolve. Fold a transcript hash into the cache key so the same
+#       follow-up question ("their names") under different conversations
+#       maps to different cache entries.
+PROMPT_VERSION = "v4"
 
 
 # ---------------------------------------------------------------------------
@@ -158,58 +163,81 @@ def _normalise(question: str) -> str:
     return re.sub(r"\s+", " ", question.strip().lower())
 
 
-def _key(question: str, model: str, last_ticker: str | None = None) -> str:
+def _key(
+    question: str,
+    model: str,
+    last_ticker: str | None = None,
+    *,
+    transcript_hash: str = "",
+) -> str:
     """
-    Cache key. `last_ticker` folds the conversational context into the key
-    so a referential follow-up like "what about volume?" caches separately
-    when the previous stock was TSLA vs. AAPL — otherwise we'd serve the
-    wrong cached SQL for the wrong stock. PROMPT_VERSION invalidates stale
-    entries when prompts change.
+    Cache key. `last_ticker` and `transcript_hash` fold conversational
+    context into the key so a referential follow-up like "what about
+    volume?" or "their names" caches separately depending on what the
+    previous turns were — otherwise we'd serve the wrong cached SQL.
+    PROMPT_VERSION invalidates stale entries when prompts change.
     """
     ctx = (last_ticker or "").upper()
-    return f"{PROMPT_VERSION}::{model}::{ctx}::{_normalise(question)}"
+    return f"{PROMPT_VERSION}::{model}::{ctx}::{transcript_hash}::{_normalise(question)}"
 
 
 # Router decisions ----------------------------------------------------------
 
 def lookup_route(
-    question: str, model: str, last_ticker: str | None = None
+    question: str,
+    model: str,
+    last_ticker: str | None = None,
+    *,
+    transcript_hash: str = "",
 ) -> RouteCacheEntry | None:
-    """Return the cached router decision for (question, model, last_ticker)."""
-    return _ROUTE_CACHE.get(_key(question, model, last_ticker))
+    """Return the cached router decision for (question, model, last_ticker, transcript)."""
+    return _ROUTE_CACHE.get(_key(question, model, last_ticker, transcript_hash=transcript_hash))
 
 
 def store_route_template(
     question: str, model: str, template_name: str, params: dict,
     last_ticker: str | None = None,
+    *,
+    transcript_hash: str = "",
 ) -> None:
     _ROUTE_CACHE.set(
-        _key(question, model, last_ticker),
+        _key(question, model, last_ticker, transcript_hash=transcript_hash),
         RouteCacheEntry(kind="template", name=template_name, params=dict(params)),
     )
 
 
 def store_route_miss(
-    question: str, model: str, last_ticker: str | None = None
+    question: str, model: str, last_ticker: str | None = None,
+    *,
+    transcript_hash: str = "",
 ) -> None:
     _ROUTE_CACHE.set(
-        _key(question, model, last_ticker), RouteCacheEntry(kind="miss")
+        _key(question, model, last_ticker, transcript_hash=transcript_hash),
+        RouteCacheEntry(kind="miss"),
     )
 
 
 # AI-SQL fallback ----------------------------------------------------------
 
 def lookup_ai_sql(
-    question: str, model: str, last_ticker: str | None = None
+    question: str, model: str, last_ticker: str | None = None,
+    *,
+    transcript_hash: str = "",
 ) -> str | None:
-    """Return the cached AI-generated SQL for (question, model, last_ticker)."""
-    return _AI_SQL_CACHE.get(_key(question, model, last_ticker))
+    """Return the cached AI-generated SQL for (question, model, last_ticker, transcript)."""
+    return _AI_SQL_CACHE.get(
+        _key(question, model, last_ticker, transcript_hash=transcript_hash)
+    )
 
 
 def store_ai_sql(
-    question: str, model: str, sql: str, last_ticker: str | None = None
+    question: str, model: str, sql: str, last_ticker: str | None = None,
+    *,
+    transcript_hash: str = "",
 ) -> None:
-    _AI_SQL_CACHE.set(_key(question, model, last_ticker), sql)
+    _AI_SQL_CACHE.set(
+        _key(question, model, last_ticker, transcript_hash=transcript_hash), sql,
+    )
 
 
 # Maintenance --------------------------------------------------------------

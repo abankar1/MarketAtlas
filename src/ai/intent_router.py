@@ -210,6 +210,7 @@ def route(
     question: str,
     *,
     last_ticker: str | None = None,
+    recent_turns: tuple | list | None = None,
 ) -> RoutedTemplate | RoutingMiss:
     """
     Single Claude call. Returns RoutedTemplate on a clean match, RoutingMiss
@@ -220,17 +221,31 @@ def route(
     the matching template's `symbol` param. Explicit tickers in the new
     question always override.
 
+    `recent_turns`, when supplied, provides multi-turn conversational
+    memory — a sliding window of the user's recent questions and the
+    symbols/summary each query returned. Lets the router resolve
+    "their names", "and the bottom 3", etc. when last_ticker alone isn't
+    enough (multi-stock previous results clear last_ticker).
+
     Raises GenerationError if the response can't be parsed as JSON or the
     chosen template name is not in the registry.
     """
+    from src.ai.memory import format_transcript  # avoid circular at import-time
+
     question = question.strip()
     if not question:
         raise GenerationError("empty question")
 
-    user_message = (
+    transcript = format_transcript(recent_turns)
+    ticker_line = (
         f"<previous_context>previously discussed ticker: {last_ticker}</previous_context>\n"
-        f"{question}"
-    ) if last_ticker else question
+        if last_ticker else ""
+    )
+    user_message = (
+        (transcript + "\n" if transcript else "")
+        + ticker_line
+        + question
+    )
 
     response = client.complete(
         system=SYSTEM_PROMPT,
