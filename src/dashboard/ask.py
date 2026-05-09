@@ -529,7 +529,7 @@ def render_ask_tab(
     st.markdown("### Ask AI")
     st.caption(
         "Ask questions in plain English. Queries are read-only, capped at "
-        "1,000 rows, and timed out at 5 seconds."
+        "1,000 rows, and timed out at 15 seconds."
     )
 
     # ---- Configuration check ----
