@@ -249,7 +249,7 @@ def main() -> None:
             max-width: calc(100vw - 7rem);
           }
           h1::after {
-            content: "Interactive Market Intelligence Dashboard";
+            content: "AI-Powered Market Intelligence Dashboard";
             display: block;
             font-size: 0.6rem;
             line-height: 1.1;
@@ -561,7 +561,7 @@ def main() -> None:
     _seed_prefs_once()
 
     st.title("Market Atlas")
-    st.caption("Interactive Market Intelligence Dashboard")
+    st.caption("AI-Powered Market Intelligence Dashboard")
 
     cfg = load_config()
     db_url = (cfg.get("db_url") or "").strip()
@@ -743,7 +743,12 @@ def main() -> None:
     # Session-state buttons replace st.tabs, which resets to tab 0 on every
     # full page rerun in Streamlit 1.53 (key= parameter not supported).
     # -----------------------------------------------------------------------
-    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap", "Ask AI"]
+    # Index Overlap tab temporarily hidden — render branch kept below in case
+    # we re-enable it. To bring it back, add "Index Overlap" to this list.
+    # Ask AI is positioned right after Heatmap so the AI capability is the
+    # second thing users notice, without displacing the visual treemap as
+    # the landing page.
+    _TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
     if "active_tab" not in st.session_state:
         st.session_state["active_tab"] = "Heatmap"
 
