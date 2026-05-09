@@ -131,6 +131,7 @@ def _render_breadth_bar(breadth: pd.DataFrame) -> None:
         theme=None,
         on_select="rerun",
         key="breadth_bar",
+        config={"displayModeBar": False},
     )
 
 
@@ -261,6 +262,7 @@ def render_sector_synopsis(
         theme=None,
         on_select="rerun",
         key=f"sector_bar_{sector}",
+        config={"displayModeBar": False},
     )
 
     # Inline stock detail on bar click
@@ -296,6 +298,7 @@ def render_sector_synopsis(
                     build_detail_fig(df_ohlcv, clicked_symbol, ["SMA 20", "SMA 50"]),
                     use_container_width=True,
                     theme=None,
+                    config={"displayModeBar": False},
                 )
 
 
