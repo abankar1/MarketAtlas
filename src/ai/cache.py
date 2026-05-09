@@ -119,15 +119,20 @@ _ROUTE_CACHE = TTLCache()
 _AI_SQL_CACHE = TTLCache()
 
 
-# Bump this whenever prompts in src/ai/nl_to_sql.py or templates in
-# src/ai/query_templates.py change in a way that affects the SQL the LLM
-# generates. The version is folded into the cache key so old stale entries
-# become unreachable on the next deploy — no manual cache clear needed.
+# Bump this whenever prompts in src/ai/nl_to_sql.py, src/ai/narrate.py, or
+# templates in src/ai/query_templates.py change in a way that affects the
+# SQL the LLM generates or the narrative summary it produces. The version
+# is folded into both the SQL-cache key and the narrate-cache key so old
+# stale entries become unreachable on the next deploy — no manual cache
+# clear needed.
 # History:
 #   v1 (implicit, pre-version): original (ts AT TIME ZONE 'UTC')::date pattern.
 #   v2 (2026-05-09): switched to b.ts >= NOW() - INTERVAL '...' for chunk
 #       pruning; added 14-day filter on end_px CTEs.
-PROMPT_VERSION = "v2"
+#   v3 (2026-05-09): narrate prompt now refers to "tabs" explicitly
+#       (e.g. "See the **Stock Detail** tab"); Index Overlap removed from
+#       the tab list since that tab is hidden from the strip.
+PROMPT_VERSION = "v3"
 
 
 # ---------------------------------------------------------------------------

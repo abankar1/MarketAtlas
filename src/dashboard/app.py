@@ -249,7 +249,7 @@ def main() -> None:
             max-width: calc(100vw - 7rem);
           }
           h1::after {
-            content: "AI-Powered Market Intelligence Dashboard";
+            content: "AI-Powered Market Intelligence Web App";
             display: block;
             font-size: 0.6rem;
             line-height: 1.1;
@@ -561,7 +561,7 @@ def main() -> None:
     _seed_prefs_once()
 
     st.title("Market Atlas")
-    st.caption("AI-Powered Market Intelligence Dashboard")
+    st.caption("AI-Powered Market Intelligence Web App")
 
     cfg = load_config()
     db_url = (cfg.get("db_url") or "").strip()

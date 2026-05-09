@@ -1,6 +1,6 @@
 # Market Atlas
 
-### AI-Powered Market Intelligence Dashboard
+### AI-Powered Market Intelligence Web App
 
 ## Project Overview
 

@@ -15,7 +15,7 @@ import hashlib
 import json
 import re
 
-from .cache import TTLCache
+from .cache import TTLCache, PROMPT_VERSION
 from .client import AIClient, AIClientError
 
 
@@ -42,20 +42,20 @@ Style:
   count, range) instead of listing rows.
 
 OPTIONAL TAB POINTER:
-The Market Atlas dashboard has these other tabs:
+The Market Atlas web app has these other tabs:
   • Heatmap — full-market treemap with daily moves, top/bottom 5 banner.
   • Sector Synopsis — every GICS sector's gainers, losers, breadth.
   • Stock Detail — full OHLCV history + chart for a single ticker.
   • News — recent headlines + sentiment for a ticker.
-  • Index Overlap — which symbols are in S&P 500 / NASDAQ-100 / Dow 30.
 
 If — and only if — one of those tabs would show MEANINGFULLY MORE than
 the answer already gives, append ONE short sentence pointing the user
-there. Use the format: " See **Stock Detail** for the full chart." (one
-tab name in **bold**, one trailing sentence). Never recommend "Ask AI"
-itself. Never append more than one pointer. Skip the pointer entirely if
-the answer is already complete (e.g. a single-aggregate question whose
-exact answer is in the row).
+there. Use the format: " See the **Stock Detail** tab for the full chart."
+— always include the literal word "tab" after the bold name, so the user
+knows it's a tab in this app. One tab name in **bold**, one trailing
+sentence. Never recommend "Ask AI" itself. Never append more than one
+pointer. Skip the pointer entirely if the answer is already complete
+(e.g. a single-aggregate question whose exact answer is in the row).
 
 Output ONLY the one-liner (and at most one optional tab pointer). No
 preamble, no markdown headers, no quotes wrapping it.
@@ -100,6 +100,10 @@ def _key(
     last_ticker: str | None = None,
 ) -> str:
     h = hashlib.sha1()
+    # PROMPT_VERSION invalidates stale cached narratives whenever the
+    # narrate system prompt changes (e.g. tab list or formatting rules).
+    h.update(PROMPT_VERSION.encode())
+    h.update(b"|")
     h.update(question.strip().lower().encode())
     h.update(b"|")
     h.update((last_ticker or "").upper().encode())
