@@ -166,10 +166,15 @@ def execute_safe(
     sql: str,
     bound_params: dict | None = None,
     max_rows: int = 1000,
-    timeout_ms: int = 5000,
+    timeout_ms: int = 15000,
 ) -> ExecutionResult:
     """
     Execute already-validated SQL on the read-only role.
+
+    Default 15s timeout fits Timescale Cloud round-trip + analytical query
+    headroom (e.g. NASDAQ-100 7-day return ~4.5s on cloud free tier);
+    local Postgres queries that finish in <100ms are unaffected by the
+    higher ceiling.
 
     The role itself has statement_timeout=5s set at the role level; this
     function ALSO sets statement_timeout per-connection as belt-and-braces.
