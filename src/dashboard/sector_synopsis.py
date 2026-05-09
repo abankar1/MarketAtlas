@@ -108,7 +108,9 @@ def _render_breadth_bar(breadth: pd.DataFrame) -> None:
     )
     fig.update_layout(
         height=max(220, len(breadth) * 28),
-        margin=dict(t=10, l=10, r=20, b=30),
+        # t=30 reserves room for the "50%" annotation above the plot area;
+        # at the previous t=10 the label was clipped to the bottom half.
+        margin=dict(t=30, l=10, r=20, b=30),
         xaxis=dict(
             title="% of stocks up",
             gridcolor="rgba(128,128,128,0.2)",
