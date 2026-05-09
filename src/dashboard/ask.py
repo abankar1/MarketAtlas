@@ -50,8 +50,8 @@ EXAMPLE_QUESTIONS = [
     "Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?",
     "What's the average daily volume for NVDA over the past 90 days?",
     "Show me the top 10 NASDAQ-100 stocks by return over the past week.",
-    "Which stocks appear in all three indices?",
-    "How many stocks are in each sector across the S&P 500?",
+    "How is Information Technology performing this month?",
+    "Which stocks are down more than 20% this quarter?",
     "Find symbols where today's volume is at least 3x the 20-day average.",
 ]
 
@@ -555,12 +555,6 @@ def render_ask_tab(
 ) -> None:
     """Render the Ask tab. Entry point called from app.py."""
 
-    st.markdown("### Ask AI")
-    st.caption(
-        "Ask questions in plain English. Queries are read-only, capped at "
-        "1,000 rows, and timed out at 15 seconds."
-    )
-
     # ---- Configuration check ----
     if ai_client is None:
         st.warning(
@@ -614,7 +608,7 @@ def render_ask_tab(
     # building its own submit pipeline that responds to Enter directly.
     _MIN_CHARS = 10
     submitted = st.chat_input(
-        placeholder="Ask a question — e.g. \"Which Health Care S&P 500 stocks gained 10% in the last 30 days?\"",
+        placeholder="Ask a question — e.g. \"How is Tesla performing this month?\"",
         max_chars=500,
         key="ask_chat_input",
     )
@@ -707,6 +701,22 @@ def render_ask_tab(
         st.markdown("---")
         for i, entry in enumerate(st.session_state.ask_history[-10:]):
             _render_history_entry(entry, idx=i)
+
+    # ---- Scope disclaimer ----
+    # The disclaimer is the last in-flow element. Without intervention it
+    # sticks to whatever immediately precedes it (the Clear-history button)
+    # and leaves a huge gap to the sticky chat_input bar at the bottom.
+    # The marker DIV below pairs with CSS in app.py to flex-push it to the
+    # bottom of the main content area so it sits just above the chat input.
+    st.markdown(
+        '<div data-ask-disclaimer-anchor="true"></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "📊 Covers **daily historical price + volume** data for ~600 "
+        "large-cap U.S. stocks across major indices. Designed for analysis "
+        "of market behavior, not forecasting future performance."
+    )
 
 
 def _render_history_entry(entry: dict, idx: int) -> None:

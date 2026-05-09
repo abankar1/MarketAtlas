@@ -137,7 +137,10 @@ _AI_SQL_CACHE = TTLCache()
 #       resolve. Fold a transcript hash into the cache key so the same
 #       follow-up question ("their names") under different conversations
 #       maps to different cache entries.
-PROMPT_VERSION = "v4"
+#   v5 (2026-05-09): CANNOT_ANSWER detail strings are now sentence-case
+#       (capitalised first letter, terminating period). Few-shot examples
+#       updated and a Python post-processor enforces the format.
+PROMPT_VERSION = "v5"
 
 
 # ---------------------------------------------------------------------------

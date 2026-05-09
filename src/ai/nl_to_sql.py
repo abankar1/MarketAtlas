@@ -249,7 +249,7 @@ WHERE symbol = 'AAPL'
 <question>What's the P/E ratio for Apple?</question>
 <sql>
 SELECT 'CANNOT_ANSWER' AS reason,
-       'fundamentals data (P/E, EPS, market cap) is not in this database' AS detail;
+       'Fundamentals data (P/E, EPS, market cap) is not in this database.' AS detail;
 </sql>
 </example>
 
@@ -374,7 +374,7 @@ LIMIT 1;
 <question>hello</question>
 <sql>
 SELECT 'CANNOT_ANSWER' AS reason,
-       'not a data question — ask about a stock, sector, or index (e.g. "what is going on with NFLX?", "Top 5 NASDAQ-100 movers this week")' AS detail;
+       'Not a data question — ask about a stock, sector, or index (e.g. "what is going on with NFLX?", "Top 5 NASDAQ-100 movers this week").' AS detail;
 </sql>
 </example>
 
@@ -382,7 +382,7 @@ SELECT 'CANNOT_ANSWER' AS reason,
 <question>are you working?</question>
 <sql>
 SELECT 'CANNOT_ANSWER' AS reason,
-       'meta-question — ask a stock data question instead (e.g. "How is AAPL doing?", "Top S&P 500 gainers this month")' AS detail;
+       'Meta-question — ask a stock data question instead (e.g. "How is AAPL doing?", "Top S&P 500 gainers this month").' AS detail;
 </sql>
 </example>
 """
@@ -436,7 +436,11 @@ ABSOLUTE RULES (never violate these):
    WHERE symbol = 'ABNB'. DO NOT use ILIKE on assets.name.
    You know the tickers for all major US-listed companies.
    If a name genuinely has no matching US-listed ticker, use
-   CANNOT_ANSWER with: 'could not identify a US ticker for "<name>"'.
+   CANNOT_ANSWER with: 'Could not identify a US ticker for "<name>".'.
+   CANNOT_ANSWER detail strings are full sentences in sentence case
+   (capitalised first letter, terminating period). They surface to the
+   end-user verbatim, so they should read like a friendly explanation,
+   not a stack trace.
 10. Vague questions naming a company OR a sector ARE data questions.
     Single-stock vagueness ("tell me about airbnb", "how is nvidia doing")
     → return a last-30-days price summary: latest close, 30-day return %,
@@ -631,6 +635,15 @@ def generate_sql(
                 re.IGNORECASE,
             )
             detail = m.group(1) if m else ""
+        # Defensive sentence-case + terminator. The system prompt instructs
+        # the model to write detail strings this way, but a stray lowercase
+        # opener leaks straight to end users — fix it here so prompt drift
+        # never escapes into the UI.
+        detail = detail.strip()
+        if detail:
+            detail = detail[0].upper() + detail[1:]
+            if detail[-1] not in ".!?":
+                detail += "."
         raise CannotAnswerError("question is out of scope", detail=detail)
 
     return GeneratedQuery(
