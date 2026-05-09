@@ -119,6 +119,17 @@ _ROUTE_CACHE = TTLCache()
 _AI_SQL_CACHE = TTLCache()
 
 
+# Bump this whenever prompts in src/ai/nl_to_sql.py or templates in
+# src/ai/query_templates.py change in a way that affects the SQL the LLM
+# generates. The version is folded into the cache key so old stale entries
+# become unreachable on the next deploy — no manual cache clear needed.
+# History:
+#   v1 (implicit, pre-version): original (ts AT TIME ZONE 'UTC')::date pattern.
+#   v2 (2026-05-09): switched to b.ts >= NOW() - INTERVAL '...' for chunk
+#       pruning; added 14-day filter on end_px CTEs.
+PROMPT_VERSION = "v2"
+
+
 # ---------------------------------------------------------------------------
 # Public API — typed payloads
 # ---------------------------------------------------------------------------
@@ -147,10 +158,11 @@ def _key(question: str, model: str, last_ticker: str | None = None) -> str:
     Cache key. `last_ticker` folds the conversational context into the key
     so a referential follow-up like "what about volume?" caches separately
     when the previous stock was TSLA vs. AAPL — otherwise we'd serve the
-    wrong cached SQL for the wrong stock.
+    wrong cached SQL for the wrong stock. PROMPT_VERSION invalidates stale
+    entries when prompts change.
     """
     ctx = (last_ticker or "").upper()
-    return f"{model}::{ctx}::{_normalise(question)}"
+    return f"{PROMPT_VERSION}::{model}::{ctx}::{_normalise(question)}"
 
 
 # Router decisions ----------------------------------------------------------
