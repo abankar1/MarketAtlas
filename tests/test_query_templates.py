@@ -154,8 +154,8 @@ def test_int_param_accepts_numeric_string():
         "symbol_avg_volume",
         {"symbol": "AAPL", "days": "30"},
     )
-    # Inlined as int 30
-    assert "CURRENT_DATE - 30" in sql
+    # Inlined as int 30 in the INTERVAL clause
+    assert "INTERVAL '30 days'" in sql
 
 
 def test_float_param_accepts_int():
@@ -215,7 +215,7 @@ def test_numeric_params_are_inlined():
         {"index": "all", "days": 7, "top_n": 25},
     )
     assert "days" not in bound and "top_n" not in bound
-    assert "CURRENT_DATE - 7" in sql
+    assert "INTERVAL '7 days'" in sql
     assert "LIMIT 25" in sql
 
 
