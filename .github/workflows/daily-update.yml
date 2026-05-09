@@ -1,17 +1,18 @@
 name: Daily market data update
 
-# Schedule the market data update for after the 4:00 PM ET market close,
-# allowing ~30 min for Marketstack to publish the day's final bars.
+# Schedule the market data refresh for early-morning US/Pacific so the app
+# has fresh closes ready before the workday begins. Each run captures the
+# most recent trading day's adjusted bars from Marketstack.
 #
 # GitHub cron runs in UTC and DOES NOT honor DST; the schedule may drift
-# by an hour twice a year. Acceptable for an after-close batch job.
+# by an hour twice a year. Acceptable for an early-morning batch.
 #
 # `workflow_dispatch` lets you trigger an ad-hoc run from the Actions tab.
 on:
   schedule:
-    - cron: "0 9 * * 1"    # 09:00 UTC Monday (early-morning US Pacific)
-    - cron: "0 1 * * 4"    # 01:00 UTC Thursday (= Wed evening US Pacific)
-    - cron: "0 1 * * 6"    # 01:00 UTC Saturday (= Fri evening US Pacific)
+    - cron: "0 9 * * 1"    # Monday 09:00 UTC = 1 AM PST / 2 AM PDT
+    - cron: "0 9 * * 3"    # Wednesday 09:00 UTC = 1 AM PST / 2 AM PDT
+    - cron: "0 9 * * 5"    # Friday 09:00 UTC = 1 AM PST / 2 AM PDT
   workflow_dispatch:
 
 # Avoid stacking two runs if a previous one is still going (e.g. retries).
