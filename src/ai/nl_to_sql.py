@@ -249,7 +249,7 @@ WHERE symbol = 'AAPL'
 <question>What's the P/E ratio for Apple?</question>
 <sql>
 SELECT 'CANNOT_ANSWER' AS reason,
-       'fundamentals data (P/E, EPS, market cap) is not in this database' AS detail;
+       'Fundamentals data (P/E, EPS, market cap) is not in this database.' AS detail;
 </sql>
 </example>
 
@@ -374,7 +374,7 @@ LIMIT 1;
 <question>hello</question>
 <sql>
 SELECT 'CANNOT_ANSWER' AS reason,
-       'not a data question — ask about a stock, sector, or index (e.g. "what is going on with NFLX?", "Top 5 NASDAQ-100 movers this week")' AS detail;
+       'Not a data question — ask about a stock, sector, or index (e.g. "what is going on with NFLX?", "Top 5 NASDAQ-100 movers this week").' AS detail;
 </sql>
 </example>
 
@@ -382,7 +382,7 @@ SELECT 'CANNOT_ANSWER' AS reason,
 <question>are you working?</question>
 <sql>
 SELECT 'CANNOT_ANSWER' AS reason,
-       'meta-question — ask a stock data question instead (e.g. "How is AAPL doing?", "Top S&P 500 gainers this month")' AS detail;
+       'Meta-question — ask a stock data question instead (e.g. "How is AAPL doing?", "Top S&P 500 gainers this month").' AS detail;
 </sql>
 </example>
 """
@@ -436,7 +436,11 @@ ABSOLUTE RULES (never violate these):
    WHERE symbol = 'ABNB'. DO NOT use ILIKE on assets.name.
    You know the tickers for all major US-listed companies.
    If a name genuinely has no matching US-listed ticker, use
-   CANNOT_ANSWER with: 'could not identify a US ticker for "<name>"'.
+   CANNOT_ANSWER with: 'Could not identify a US ticker for "<name>".'.
+   CANNOT_ANSWER detail strings are full sentences in sentence case
+   (capitalised first letter, terminating period). They surface to the
+   end-user verbatim, so they should read like a friendly explanation,
+   not a stack trace.
 10. Vague questions naming a company OR a sector ARE data questions.
     Single-stock vagueness ("tell me about airbnb", "how is nvidia doing")
     → return a last-30-days price summary: latest close, 30-day return %,
@@ -500,19 +504,34 @@ _CANNOT_ANSWER = re.compile(r"CANNOT_ANSWER", re.IGNORECASE)
 _SYMBOL_LITERAL = re.compile(r"symbol\s*=\s*'([A-Z0-9.\-]{1,10})'", re.IGNORECASE)
 
 
-def _with_context(question: str, last_ticker: str | None) -> str:
+def _with_context(
+    question: str,
+    last_ticker: str | None,
+    recent_turns: tuple | list | None = None,
+) -> str:
     """
-    Prepend a one-line context preamble when we have a remembered ticker.
-    The model is instructed (rule 12 in SYSTEM_PROMPT) to use it ONLY when
-    the new question is referential ("what about volume?", "and the highs?")
-    and contains no ticker of its own.
+    Prepend a context preamble when we have remembered context.
+
+    Two layers of context (both optional, can co-exist):
+      - `recent_turns`: a sliding window of the last few user questions
+        and the symbols/summary each returned. The model uses this to
+        resolve referential follow-ups like "their names", "the top 3",
+        "what about volume?" — handles multi-symbol previous results that
+        leave `last_ticker` empty.
+      - `last_ticker`: a single anchor symbol from the immediately prior
+        single-stock query. Lets the model bind a remembered ticker into a
+        new question that has none (rule 12 in SYSTEM_PROMPT).
     """
-    if not last_ticker:
-        return question
-    return (
+    from src.ai.memory import format_transcript  # avoid circular import
+
+    transcript = format_transcript(recent_turns)
+    ticker_line = (
         f"<previous_context>previously discussed ticker: {last_ticker}</previous_context>\n"
-        f"{question}"
+        if last_ticker else ""
     )
+    if not transcript and not ticker_line:
+        return question
+    return (transcript + "\n" if transcript else "") + ticker_line + question
 
 
 def extract_single_ticker(sql: str) -> str | None:
@@ -535,6 +554,7 @@ def generate_sql(
     question: str,
     *,
     last_ticker: str | None = None,
+    recent_turns: tuple | list | None = None,
 ) -> GeneratedQuery:
     """
     Generate a SQL query from a natural-language question.
@@ -545,6 +565,11 @@ def generate_sql(
     model is told to use it only when the new question has no ticker of
     its own and is clearly referential — explicit tickers always override.
 
+    `recent_turns` carries forward the last few user turns + the symbols
+    each query returned, so referential follow-ups like "their names" or
+    "drop the bottom 3" resolve when the previous result was multi-symbol
+    (which clears `last_ticker`).
+
     Raises CannotAnswerError if the model declines.
     Raises GenerationError if the output cannot be parsed.
     """
@@ -552,7 +577,7 @@ def generate_sql(
     if not question:
         raise GenerationError("empty question")
 
-    user_message = _with_context(question, last_ticker)
+    user_message = _with_context(question, last_ticker, recent_turns)
 
     response = client.complete(
         system=SYSTEM_PROMPT,
@@ -610,6 +635,15 @@ def generate_sql(
                 re.IGNORECASE,
             )
             detail = m.group(1) if m else ""
+        # Defensive sentence-case + terminator. The system prompt instructs
+        # the model to write detail strings this way, but a stray lowercase
+        # opener leaks straight to end users — fix it here so prompt drift
+        # never escapes into the UI.
+        detail = detail.strip()
+        if detail:
+            detail = detail[0].upper() + detail[1:]
+            if detail[-1] not in ".!?":
+                detail += "."
         raise CannotAnswerError("question is out of scope", detail=detail)
 
     return GeneratedQuery(

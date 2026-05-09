@@ -103,7 +103,7 @@ def render_index_overlap_tab(db_url: str) -> None:
         paper_bgcolor="rgba(0,0,0,0)",
         xaxis=dict(gridcolor="rgba(128,128,128,0.2)", zeroline=False, automargin=True),
     )
-    st.plotly_chart(fig, use_container_width=True, theme=None)
+    st.plotly_chart(fig, use_container_width=True, theme=None, config={"displayModeBar": False})
 
     st.markdown("---")
 
