@@ -370,7 +370,7 @@ def render_heatmap_tab(
             center_zero=center_zero,
             values_col=_values_col,
         )
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, use_container_width=True, theme=None, config={"displayModeBar": False})
     else:
         render_ranked_table(
             df, color_range, color_scale=color_scale, center_zero=center_zero

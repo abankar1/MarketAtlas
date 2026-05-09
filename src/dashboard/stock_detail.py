@@ -103,6 +103,7 @@ def render_stock_detail(
                     build_compare_fig(series, primary=compare_symbols[0]),
                     use_container_width=True,
                     theme=None,
+                    config={"displayModeBar": False},
                 )
 
     # ----------------------------------------------------------------
@@ -179,4 +180,5 @@ def render_stock_detail(
                 build_detail_fig(df_ohlcv, selected_symbol, active_indicators),
                 use_container_width=True,
                 theme=None,
+                config={"displayModeBar": False},
             )

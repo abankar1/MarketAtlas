@@ -98,6 +98,7 @@ def _key(
     rows: list[tuple],
     *,
     last_ticker: str | None = None,
+    transcript_hash: str = "",
 ) -> str:
     h = hashlib.sha1()
     # PROMPT_VERSION invalidates stale cached narratives whenever the
@@ -107,6 +108,8 @@ def _key(
     h.update(question.strip().lower().encode())
     h.update(b"|")
     h.update((last_ticker or "").upper().encode())
+    h.update(b"|")
+    h.update(transcript_hash.encode())
     h.update(b"|")
     h.update(",".join(columns).encode())
     h.update(b"|")
@@ -124,6 +127,7 @@ def summarize(
     rows: list,
     *,
     last_ticker: str | None = None,
+    recent_turns: tuple | list | None = None,
 ) -> tuple[str, dict] | None:
     """
     Return (narrative, token_usage_dict) or None on failure.
@@ -132,27 +136,36 @@ def summarize(
     present, the narrator can resolve referential pronouns ("it", "that
     stock") even if the SQL result columns don't include the symbol.
 
+    `recent_turns` carries the multi-turn transcript so the narrator can
+    write follow-ups that reference earlier results coherently
+    ("Of those 22 stocks, 8 are gainers...").
+
     Never raises — narration is best-effort. The dataframe still renders
     if this call fails, and the user just doesn't get the one-liner.
     """
+    from src.ai.memory import format_transcript, transcript_hash as _hash_turns
+
     cols = list(columns)
     row_list = list(rows)
 
     if not row_list:
         return ("No rows matched.", {"input": 0, "output": 0, "cached": True})
 
-    key = _key(question, cols, row_list, last_ticker=last_ticker)
+    t_hash = _hash_turns(recent_turns)
+    key = _key(question, cols, row_list, last_ticker=last_ticker, transcript_hash=t_hash)
     cached = _NARRATE_CACHE.get(key)
     if cached is not None:
         return (cached, {"input": 0, "output": 0, "cached": True})
 
+    transcript = format_transcript(recent_turns)
     context_line = (
         f"Previously discussed ticker: {last_ticker}\n"
         if last_ticker else ""
     )
     user_payload = (
-        f"{context_line}Question: {question}\n\n"
-        f"Result data:\n{_serialise(cols, row_list)}"
+        (transcript + "\n" if transcript else "")
+        + f"{context_line}Question: {question}\n\n"
+        + f"Result data:\n{_serialise(cols, row_list)}"
     )
 
     try:

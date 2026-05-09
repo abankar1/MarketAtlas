@@ -50,8 +50,8 @@ EXAMPLE_QUESTIONS = [
     "Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?",
     "What's the average daily volume for NVDA over the past 90 days?",
     "Show me the top 10 NASDAQ-100 stocks by return over the past week.",
-    "Which stocks appear in all three indices?",
-    "How many stocks are in each sector across the S&P 500?",
+    "How is Information Technology performing this month?",
+    "Which stocks are down more than 20% this quarter?",
     "Find symbols where today's volume is at least 3x the 20-day average.",
 ]
 
@@ -115,6 +115,7 @@ def _attach_narrative(
     question: str,
     *,
     last_ticker: str | None = None,
+    recent_turns: tuple | list | None = None,
 ) -> dict:
     """
     Best-effort one-liner summary attached to a successful outcome. Mutates
@@ -125,6 +126,9 @@ def _attach_narrative(
     `last_ticker` is the prior conversational anchor — passed through so
     the narrator can resolve "it" / "that stock" even when the SQL result
     columns don't include the symbol.
+
+    `recent_turns` is the multi-turn transcript so the narrator can write
+    follow-ups that reference earlier results coherently.
     """
     if not outcome.get("ok"):
         return outcome
@@ -132,7 +136,8 @@ def _attach_narrative(
     if r is None:
         return outcome
     narration = narrate_result(
-        ai_client, question, r.columns, r.rows, last_ticker=last_ticker
+        ai_client, question, r.columns, r.rows,
+        last_ticker=last_ticker, recent_turns=recent_turns,
     )
     if narration is None:
         return outcome
@@ -149,18 +154,28 @@ def _run_query(
     db_url: str,
     *,
     last_ticker: str | None = None,
+    recent_turns: tuple | list | None = None,
 ) -> dict:
     """
     Route → render → execute, with the AI-SQL flow as the fallback path.
 
+    `recent_turns` is the conversational memory window — passed all the
+    way down to router / nl-to-sql / narrate prompts and folded into all
+    cache keys so referential follow-ups resolve and cache correctly.
+
     Returns a result dict for rendering. Never raises — all exceptions are
     converted into result dicts so the UI can render them.
     """
+    from src.ai.memory import transcript_hash as _hash_turns
+
     # 1. Consult the route cache. A hit means we've already paid for this
     # routing decision recently — no API call needed. The actual SQL still
     # runs against the current DB state, so daily data changes are picked up.
     model_id = ai_client.model
-    route_hit = lookup_route(question, model_id, last_ticker=last_ticker)
+    t_hash = _hash_turns(recent_turns)
+    route_hit = lookup_route(
+        question, model_id, last_ticker=last_ticker, transcript_hash=t_hash,
+    )
     routed_from_cache = False
 
     if route_hit is not None:
@@ -185,7 +200,10 @@ def _run_query(
             )
     else:
         try:
-            routing = route(ai_client, question, last_ticker=last_ticker)
+            routing = route(
+                ai_client, question,
+                last_ticker=last_ticker, recent_turns=recent_turns,
+            )
         except GenerationError as e:
             _log_summary(
                 question, model=model_id, status="generation_error",
@@ -213,10 +231,13 @@ def _run_query(
         if isinstance(routing, RoutedTemplate):
             store_route_template(
                 question, model_id, routing.name, routing.params,
-                last_ticker=last_ticker,
+                last_ticker=last_ticker, transcript_hash=t_hash,
             )
         else:
-            store_route_miss(question, model_id, last_ticker=last_ticker)
+            store_route_miss(
+                question, model_id,
+                last_ticker=last_ticker, transcript_hash=t_hash,
+            )
 
     if isinstance(routing, RoutedTemplate):
         try:
@@ -259,7 +280,8 @@ def _run_query(
                     "cache_read": routing.cache_read_tokens,
                     "cache_creation": routing.cache_creation_tokens,
                 },
-            }, ai_client, question, last_ticker=last_ticker)
+            }, ai_client, question,
+            last_ticker=last_ticker, recent_turns=recent_turns)
         except TemplateError as e:
             # Param mismatch from the router (e.g. unknown sector). Don't
             # fall through to AI-SQL — the model already chose this template,
@@ -331,7 +353,9 @@ def _run_query(
     sql_from_cache = False
     try:
         # 1. Generate (or pull from cache)
-        cached_sql = lookup_ai_sql(question, model_id, last_ticker=last_ticker)
+        cached_sql = lookup_ai_sql(
+            question, model_id, last_ticker=last_ticker, transcript_hash=t_hash,
+        )
         if cached_sql is not None:
             sql_from_cache = True
             # Synthesise a GeneratedQuery so downstream logging is uniform.
@@ -344,9 +368,13 @@ def _run_query(
                 cache_creation_tokens=0,
             )
         else:
-            generated = generate_sql(ai_client, question, last_ticker=last_ticker)
+            generated = generate_sql(
+                ai_client, question,
+                last_ticker=last_ticker, recent_turns=recent_turns,
+            )
             store_ai_sql(
-                question, model_id, generated.sql, last_ticker=last_ticker
+                question, model_id, generated.sql,
+                last_ticker=last_ticker, transcript_hash=t_hash,
             )
 
         # 2. Validate (cheap; do this even on cache hits — the cached SQL
@@ -397,7 +425,8 @@ def _run_query(
                 "cache_read": generated.cache_read_tokens + router_tokens["cache_read"],
                 "cache_creation": generated.cache_creation_tokens + router_tokens["cache_creation"],
             },
-        }, ai_client, question, last_ticker=last_ticker)
+        }, ai_client, question,
+        last_ticker=last_ticker, recent_turns=recent_turns)
 
     except CannotAnswerError as e:
         _log_summary(
@@ -526,12 +555,6 @@ def render_ask_tab(
 ) -> None:
     """Render the Ask tab. Entry point called from app.py."""
 
-    st.markdown("### Ask AI")
-    st.caption(
-        "Ask questions in plain English. Queries are read-only, capped at "
-        "1,000 rows, and timed out at 15 seconds."
-    )
-
     # ---- Configuration check ----
     if ai_client is None:
         st.warning(
@@ -556,6 +579,13 @@ def render_ask_tab(
         # successful query, so a follow-up like "what about volume?" can resolve
         # without the user retyping the symbol. Cleared on history clear.
         st.session_state.ask_last_ticker = None
+    if "ask_recent_turns" not in st.session_state:
+        # Sliding window of recent ConversationTurn entries (oldest first,
+        # newest last). Capped at MAX_TURNS in the push logic below. Folded
+        # into router/SQL/narrate prompts so referential follow-ups like
+        # "their names" or "drop the bottom 3" resolve when last_ticker
+        # alone isn't enough (multi-stock previous results clear it).
+        st.session_state.ask_recent_turns = []
 
     # ---- Example chips — click to run immediately ----
     # chat_input doesn't accept programmatic prefill, so a chip click sets a
@@ -578,7 +608,7 @@ def render_ask_tab(
     # building its own submit pipeline that responds to Enter directly.
     _MIN_CHARS = 10
     submitted = st.chat_input(
-        placeholder="Ask a question — e.g. \"Which Health Care S&P 500 stocks gained 10% in the last 30 days?\"",
+        placeholder="Ask a question — e.g. \"How is Tesla performing this month?\"",
         max_chars=500,
         key="ask_chat_input",
     )
@@ -594,6 +624,7 @@ def render_ask_tab(
         if st.button("Clear history", use_container_width=True):
             st.session_state.ask_history = []
             st.session_state.ask_last_ticker = None
+            st.session_state.ask_recent_turns = []
             st.rerun()
     if clear_cache_col is not None:
         with clear_cache_col:
@@ -626,6 +657,7 @@ def render_ask_tab(
                 outcome = _run_query(
                     trimmed, ai_client, db_url_readonly, db_url,
                     last_ticker=st.session_state.ask_last_ticker,
+                    recent_turns=tuple(st.session_state.ask_recent_turns),
                 )
             st.session_state.ask_history.append(
                 {"question": trimmed, "outcome": outcome}
@@ -637,6 +669,31 @@ def render_ask_tab(
             if outcome.get("ok") and outcome.get("sql"):
                 ticker = extract_single_ticker(outcome["sql"])
                 st.session_state.ask_last_ticker = ticker
+
+            # Update the multi-turn transcript window (used for referential
+            # follow-ups beyond a single ticker). Only push successful turns
+            # — failed/timeout ones aren't useful context. Cap at MAX_TURNS.
+            if outcome.get("ok"):
+                from src.ai.memory import (
+                    ConversationTurn, MAX_TURNS, extract_top_symbols,
+                )
+                r = outcome.get("result")
+                top_symbols: tuple[str, ...] = ()
+                if r is not None:
+                    top_symbols = extract_top_symbols(
+                        list(r.columns), list(r.rows),
+                    )
+                summary = (outcome.get("narrative") or "").strip()
+                turn = ConversationTurn(
+                    question=trimmed,
+                    top_symbols=top_symbols,
+                    summary=summary,
+                )
+                st.session_state.ask_recent_turns.append(turn)
+                if len(st.session_state.ask_recent_turns) > MAX_TURNS:
+                    st.session_state.ask_recent_turns = (
+                        st.session_state.ask_recent_turns[-MAX_TURNS:]
+                    )
             st.rerun()
 
     # ---- Render history (oldest first, newest at bottom — chat-style) ----
@@ -644,6 +701,22 @@ def render_ask_tab(
         st.markdown("---")
         for i, entry in enumerate(st.session_state.ask_history[-10:]):
             _render_history_entry(entry, idx=i)
+
+    # ---- Scope disclaimer ----
+    # The disclaimer is the last in-flow element. Without intervention it
+    # sticks to whatever immediately precedes it (the Clear-history button)
+    # and leaves a huge gap to the sticky chat_input bar at the bottom.
+    # The marker DIV below pairs with CSS in app.py to flex-push it to the
+    # bottom of the main content area so it sits just above the chat input.
+    st.markdown(
+        '<div data-ask-disclaimer-anchor="true"></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "📊 Covers **daily historical price + volume** data for ~600 "
+        "large-cap U.S. stocks across major indices. Designed for analysis "
+        "of market behavior, not forecasting future performance."
+    )
 
 
 def _render_history_entry(entry: dict, idx: int) -> None:
