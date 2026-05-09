@@ -1,7 +1,7 @@
 name: Daily market data update
 
-# Schedule the daily update for ~22:30 UTC weekdays — that's 5:30 PM ET
-# (after the 4:00 PM market close + Marketstack's ~30 min publish delay).
+# Schedule the market data update for after the 4:00 PM ET market close,
+# allowing ~30 min for Marketstack to publish the day's final bars.
 #
 # GitHub cron runs in UTC and DOES NOT honor DST; the schedule may drift
 # by an hour twice a year. Acceptable for an after-close batch job.
@@ -9,7 +9,9 @@ name: Daily market data update
 # `workflow_dispatch` lets you trigger an ad-hoc run from the Actions tab.
 on:
   schedule:
-    - cron: "30 22 * * 1-5"
+    - cron: "0 9 * * 1"    # 09:00 UTC Monday (early-morning US Pacific)
+    - cron: "0 1 * * 4"    # 01:00 UTC Thursday (= Wed evening US Pacific)
+    - cron: "0 1 * * 6"    # 01:00 UTC Saturday (= Fri evening US Pacific)
   workflow_dispatch:
 
 # Avoid stacking two runs if a previous one is still going (e.g. retries).
