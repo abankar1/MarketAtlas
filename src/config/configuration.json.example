@@ -1,8 +1,10 @@
 {
   "db_url": "postgresql://user:password@localhost:5432/market_timeseries",
+  "db_url_readonly": "postgresql://marketatlas_reader:READONLY_PASSWORD@localhost:5432/market_timeseries",
   "marketdata_token": "YOUR_MARKETSTACK_ACCESS_KEY",
   "days": 1000,
   "api_sleep_seconds": 0.2,
-  "anthropic_api_key": "YOUR_ANTHROPIC_API_KEY (optional — used for AI sector classification)",
+  "anthropic_api_key": "YOUR_ANTHROPIC_API_KEY (required for the Ask tab; also used for AI sector classification)",
+  "anthropic_model": "claude-haiku-4-5",
   "marketaux_token": "YOUR_MARKETAUX_API_KEY (optional — used for News tab headlines)"
 }

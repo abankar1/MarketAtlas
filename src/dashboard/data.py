@@ -333,7 +333,34 @@ def get_ohlcv_cached(
 #
 # Uses @st.cache_data instead of session_state so the cache is shared
 # across all browser sessions of the same server.
+#
+# Hit/miss logging
+# ----------------
+# @st.cache_data only runs the wrapped function on a miss, which means we
+# can't directly observe hits from inside it. We keep a small parallel
+# tracking dict here that records the wall-clock timestamp of each
+# (symbol, limit) we fetched. A subsequent call within CACHE_TTL_SECONDS
+# of that timestamp is logged as a HIT; otherwise we log a MISS and call
+# Marketaux. The tracking is age-based (not bucket-based) so it stays in
+# step with @st.cache_data's age-based eviction.
 # ---------------------------------------------------------------------------
+
+import threading
+import time as _time_module
+
+_news_seen: dict[tuple, float] = {}
+_news_seen_lock = threading.RLock()
+
+
+def _news_log(msg: str) -> None:
+    """Single-line stderr log with [news] prefix — same convention as
+    [ask] and [app] elsewhere."""
+    print(
+        f"[news] {dt.datetime.now().isoformat(timespec='seconds')} {msg}",
+        file=sys.stderr,
+        flush=True,
+    )
+
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False, max_entries=50)
 def _fetch_news_data(token: str, symbol: str, limit: int) -> list[dict]:
@@ -341,16 +368,7 @@ def _fetch_news_data(token: str, symbol: str, limit: int) -> list[dict]:
     Process-wide cached news fetch. Streamlit hashes the args and caches the
     return value for CACHE_TTL_SECONDS — every call within that window is
     served from memory without hitting Marketaux. Survives page refreshes.
-
-    Logs each actual Marketaux call so quota usage can be audited from the
-    Streamlit server log without surfacing it in the UI.
     """
-    print(
-        f"[news] Marketaux fetch: symbol={symbol} limit={limit} "
-        f"at {dt.datetime.now().isoformat(timespec='seconds')}",
-        file=sys.stderr,
-        flush=True,
-    )
     client = NewsClient(token=token)
     return client.fetch_news(symbol, limit=limit)
 
@@ -366,6 +384,35 @@ def get_news_cached(
     Survives page refreshes — repeated reloads of the same symbol do not
     burn Marketaux quota.
 
-    Raises NewsClientError on API failures (caller renders a warning).
+    Logs every call as either CACHE HIT or CACHE MISS. Source of truth for
+    cache state is `@st.cache_data` on `_fetch_news_data`; the parallel
+    tracking dict is just for hit/miss telemetry. Raises NewsClientError
+    on API failures (caller renders a warning).
     """
+    key = (symbol, limit)
+    now = _time_module.time()
+
+    with _news_seen_lock:
+        seen_at = _news_seen.get(key)
+        # A hit means @st.cache_data still has it: same key, fetched less
+        # than CACHE_TTL_SECONDS ago.
+        is_hit = seen_at is not None and (now - seen_at) < CACHE_TTL_SECONDS
+        if not is_hit:
+            _news_seen[key] = now
+            # Periodic GC: drop entries older than 2× TTL so the dict
+            # doesn't grow unbounded across long-running processes.
+            stale = [
+                k for k, t in _news_seen.items()
+                if (now - t) > (CACHE_TTL_SECONDS * 2)
+            ]
+            for k in stale:
+                _news_seen.pop(k, None)
+
+    if is_hit:
+        _news_log(f"CACHE HIT: symbol={symbol} limit={limit}")
+    else:
+        _news_log(
+            f"CACHE MISS: symbol={symbol} limit={limit} → calling Marketaux"
+        )
+
     return _fetch_news_data(token, symbol, limit)

@@ -20,8 +20,17 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
+
+
+# Developer-only sidebar/UI affordances are gated behind the same env var
+# that controls Streamlit's full toolbar (.streamlit/config.toml has
+# `toolbarMode = "minimal"` for end users). Launch with:
+#
+#   STREAMLIT_CLIENT_TOOLBAR_MODE=developer streamlit run src/dashboard/app.py
+_DEVELOPER_MODE = os.environ.get("STREAMLIT_CLIENT_TOOLBAR_MODE") == "developer"
 
 import streamlit as st
 import streamlit.components.v1 as st_components
@@ -37,6 +46,7 @@ from src.dashboard.data import (  # noqa: E402
     get_treemap_data_cached,
 )
 from src.dashboard.heatmap import render_heatmap_tab  # noqa: E402
+from src.dashboard.ask import render_ask_tab  # noqa: E402
 from src.dashboard.index_overlap import render_index_overlap_tab  # noqa: E402
 from src.dashboard.news import render_news_tab  # noqa: E402
 from src.dashboard.prefs import load_prefs, save_prefs  # noqa: E402
@@ -48,19 +58,19 @@ from src.dashboard.stock_detail import render_stock_detail  # noqa: E402
 # Configuration
 # ---------------------------------------------------------------------------
 
-CONFIG_CANDIDATES = [
-    REPO_ROOT / "src" / "config" / "config.json",
-    REPO_ROOT / "src" / "config" / "configuration.json",
-    REPO_ROOT / "config.json",
-    REPO_ROOT / "configuration.json",
-]
-
-
 def load_config() -> dict:
-    for p in CONFIG_CANDIDATES:
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
-    return {}
+    """
+    Load config via src.config.settings.load_settings(), which checks
+    Streamlit secrets → env vars → src/config/configuration.json in priority
+    order. Returns an empty dict if nothing is configured, so the caller can
+    show a friendly st.error instead of crashing.
+    """
+    try:
+        from dataclasses import asdict
+        from src.config.settings import load_settings
+        return asdict(load_settings())
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -120,12 +130,19 @@ def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None
 
 def _on_tab_click(tab_name: str) -> None:
     """on_click callback for custom tab navigation buttons."""
+    prev = st.session_state.get("active_tab")
     st.session_state["active_tab"] = tab_name
     # Track that the user has interacted with the tab strip at least once.
     # The mobile tab-reveal animation injects only on the rerun *after* the
     # first such click, by which time Streamlit's initial reconciliation has
     # finished and the columns DOM is stable enough to animate.
     st.session_state["tab_clicked_once"] = True
+    print(
+        f"[app] {dt.datetime.now().isoformat(timespec='seconds')} "
+        f"tab change: {prev!r} → {tab_name!r}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,12 +193,42 @@ def _seed_prefs_once() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Market Atlas", layout="wide")
+
+    # First-run-per-session log. Streamlit reruns main() on every interaction;
+    # gating on session_state ensures one app-load line per browser session,
+    # not one per rerun.
+    if not st.session_state.get("_app_loaded_logged"):
+        print(
+            f"[app] {dt.datetime.now().isoformat(timespec='seconds')} "
+            f"new session loaded — Streamlit started serving Market Atlas",
+            file=sys.stderr,
+            flush=True,
+        )
+        st.session_state["_app_loaded_logged"] = True
+
     st.markdown(
         """
         <style>
         .block-container { padding-top: 1rem; padding-bottom: 0.5rem; }
         .stMetric { padding: 0.25rem 0.5rem; }
         .stSidebar .block-container { padding-top: 0.75rem; }
+
+        /* Mover-strip: pull ticker cards close to the "Top 5" caption on desktop.
+           Mobile has its own spacing rules inside the @media block below. */
+        @media (min-width: 641px) {
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"]) {
+            margin-top: -0.75rem !important;
+          }
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"] {
+            margin-top: -0.5rem !important;
+          }
+          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
+            + [data-testid="stLayoutWrapper"]
+            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
+            margin-top: -0.5rem !important;
+          }
+        }
 
         /* ---------- Mobile (≤640px) ---------- */
         @media (max-width: 640px) {
@@ -202,7 +249,7 @@ def main() -> None:
             max-width: calc(100vw - 7rem);
           }
           h1::after {
-            content: "Interactive Market Intelligence Dashboard";
+            content: "AI-Powered Market Intelligence Web App";
             display: block;
             font-size: 0.6rem;
             line-height: 1.1;
@@ -499,6 +546,14 @@ def main() -> None:
           0%   { transform: translateX(-260px); }
           100% { transform: translateX(0); }
         }
+
+        /* Hide the chat_input character counter — Streamlit positions it
+           directly under the send-icon button where it's invisible, and
+           the count itself isn't useful enough to be worth repositioning.
+           The 500-char `max_chars` server-side limit still applies. */
+        [data-testid="InputInstructions"] {
+          display: none !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -506,11 +561,14 @@ def main() -> None:
     _seed_prefs_once()
 
     st.title("Market Atlas")
-    st.caption("Interactive Market Intelligence Dashboard")
+    st.caption("AI-Powered Market Intelligence Web App")
 
     cfg = load_config()
     db_url = (cfg.get("db_url") or "").strip()
     marketaux_token = (cfg.get("marketaux_token") or "").strip()
+    db_url_readonly = (cfg.get("db_url_readonly") or "").strip()
+    anthropic_api_key = (cfg.get("anthropic_api_key") or "").strip()
+    anthropic_model = (cfg.get("anthropic_model") or "").strip() or "claude-haiku-4-5"
 
     if not db_url:
         st.error(
@@ -518,6 +576,16 @@ def main() -> None:
             "src/config/configuration.json (or src/config/config.json)."
         )
         st.stop()
+
+    # Construct the Anthropic client once per page render. None if no key
+    # is configured — the Ask tab renders a friendly warning in that case.
+    ai_client = None
+    if anthropic_api_key:
+        from src.ai.client import AIClient
+        try:
+            ai_client = AIClient(api_key=anthropic_api_key, model=anthropic_model)
+        except ValueError:
+            ai_client = None
 
     # -----------------------------------------------------------------------
     # Sidebar — index universe
@@ -633,17 +701,17 @@ def main() -> None:
     size_by = "dollar_volume"
 
     # -----------------------------------------------------------------------
-    # Sidebar — cache stats + clear
+    # Sidebar — cache stats (always visible) + dev-only clear button
     # -----------------------------------------------------------------------
     cache_size = 24
     st.sidebar.subheader("Cache")
-    # --- Clear cache button (hidden; uncomment to re-enable) ---
-    # if st.sidebar.button("Clear cached results"):
-    #     _get_session_cache().clear()
-    #     _get_ohlcv_cache().clear()
-    #     st.session_state["treemap_cache_hits"]   = 0
-    #     st.session_state["treemap_cache_misses"] = 0
-    #     st.sidebar.success("Cleared cache")
+    if _DEVELOPER_MODE:
+        if st.sidebar.button("Clear cached results"):
+            _get_session_cache().clear()
+            _get_ohlcv_cache().clear()
+            st.session_state["treemap_cache_hits"]   = 0
+            st.session_state["treemap_cache_misses"] = 0
+            st.sidebar.success("Cleared cache")
     _tm_hits   = st.session_state.get("treemap_cache_hits",   0)
     _tm_misses = st.session_state.get("treemap_cache_misses", 0)
     _tm_slots  = len(_get_session_cache())
@@ -675,7 +743,12 @@ def main() -> None:
     # Session-state buttons replace st.tabs, which resets to tab 0 on every
     # full page rerun in Streamlit 1.53 (key= parameter not supported).
     # -----------------------------------------------------------------------
-    _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap"]
+    # Index Overlap tab temporarily hidden — render branch kept below in case
+    # we re-enable it. To bring it back, add "Index Overlap" to this list.
+    # Ask AI is positioned right after Heatmap so the AI capability is the
+    # second thing users notice, without displacing the visual treemap as
+    # the landing page.
+    _TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
     if "active_tab" not in st.session_state:
         st.session_state["active_tab"] = "Heatmap"
 
@@ -731,6 +804,13 @@ def main() -> None:
 
     elif _active_tab == "Index Overlap":
         render_index_overlap_tab(db_url)
+
+    elif _active_tab == "Ask AI":
+        render_ask_tab(
+            ai_client=ai_client,
+            db_url_readonly=db_url_readonly,
+            db_url=db_url,
+        )
 
     # Persist UI prefs to disk so they survive tab close / refresh.
     save_prefs({
