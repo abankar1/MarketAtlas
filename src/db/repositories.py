@@ -269,3 +269,102 @@ def log_nl_query(
         import traceback
         print("WARNING: nl_queries logging failed:", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Usage events — session loads + tab clicks
+# ---------------------------------------------------------------------------
+
+# Module-level flag so we only run the CREATE TABLE IF NOT EXISTS DDL once
+# per Python process. After the first successful insert the table is known
+# to exist and we skip the no-op DDL on every subsequent log call.
+_USAGE_EVENTS_ENSURED = False
+
+
+def _ensure_usage_events_table(conn: psycopg.Connection) -> None:
+    """Idempotent: create the usage_events table + indices if missing."""
+    global _USAGE_EVENTS_ENSURED
+    if _USAGE_EVENTS_ENSURED:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS usage_events (
+              id          BIGSERIAL PRIMARY KEY,
+              ts          TIMESTAMPTZ NOT NULL DEFAULT now(),
+              session_id  TEXT NOT NULL,
+              event_type  TEXT NOT NULL,
+              from_tab    TEXT,
+              to_tab      TEXT
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS usage_events_ts_idx ON usage_events (ts DESC)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS usage_events_session_idx ON usage_events (session_id)"
+        )
+    conn.commit()
+    _USAGE_EVENTS_ENSURED = True
+
+
+def _log_usage_event_sync(
+    db_url: str,
+    *,
+    session_id: str,
+    event_type: str,
+    from_tab: str | None = None,
+    to_tab: str | None = None,
+) -> None:
+    """The actual blocking DB write — runs inside the daemon thread."""
+    try:
+        with psycopg.connect(db_url, connect_timeout=3) as conn:
+            _ensure_usage_events_table(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO usage_events (
+                      session_id, event_type, from_tab, to_tab
+                    ) VALUES (%s, %s, %s, %s)
+                    """,
+                    (session_id, event_type, from_tab, to_tab),
+                )
+            conn.commit()
+    except Exception:
+        import sys
+        import traceback
+        print("WARNING: usage_events logging failed:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+
+
+def log_usage_event(
+    db_url: str,
+    *,
+    session_id: str,
+    event_type: str,            # 'session_load' | 'tab_change'
+    from_tab: str | None = None,
+    to_tab: str | None = None,
+) -> None:
+    """
+    Fire-and-forget logger for usage_events. Returns to the caller in
+    microseconds — the actual Postgres round-trip happens in a daemon
+    thread so a tab-click rerun isn't blocked on cloud DB latency.
+
+    Best-effort: any exception inside the thread is swallowed and logged
+    to stderr. Daemon threads die with the process, so an event in flight
+    when the process exits is lost — acceptable for low-volume events
+    like tab clicks.
+    """
+    import threading
+    threading.Thread(
+        target=_log_usage_event_sync,
+        args=(db_url,),
+        kwargs={
+            "session_id": session_id,
+            "event_type": event_type,
+            "from_tab": from_tab,
+            "to_tab": to_tab,
+        },
+        daemon=True,
+    ).start()
