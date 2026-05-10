@@ -272,12 +272,20 @@ def main() -> None:
           }
           [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
             + [data-testid="stLayoutWrapper"] {
-            margin-top: -0.5rem !important;
+            /* Pull each row of cards up toward its own caption. -0.5rem
+               left a 12px visible gap; -1rem brings it to ~4px so the
+               caption hugs the row visually. Applies to both rows. */
+            margin-top: -1rem !important;
           }
           [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
             + [data-testid="stLayoutWrapper"]
             + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
-            margin-top: -0.5rem !important;
+            /* Was -0.5rem (pulled the ▼ caption up onto the green row).
+               Switching to a small positive margin gives the second row
+               clear breathing room from the first on desktop, while the
+               mobile rules in @media (max-width: 640px) below stay
+               untouched. */
+            margin-top: 0.25rem !important;
           }
         }
 
@@ -398,6 +406,16 @@ def main() -> None:
             min-height: 36px !important;
             padding-bottom: 16px !important;
           }
+          /* Override: the upper (▲) row's wrapper sits above the "Top 5 ▼"
+             caption (not the chart), so its 16px bottom padding just
+             wastes vertical space. Tighten it to 2px. The lower (▼) row
+             keeps its 16px to protect bracket curves from the chart below.
+             The two rows are distinguished by data-mover-row="up"|"down"
+             on their preceding marker DIV. */
+          [data-testid="stElementContainer"]:has(div[data-mover-row="up"])
+            + [data-testid="stLayoutWrapper"] {
+            padding-bottom: 2px !important;
+          }
           /* Compact each mover card so 5 fit across at 375px width.
              width: 100% so the card fills its column (uniform widths across
              both rows); height: auto + box-sizing keep the colored border
@@ -414,12 +432,12 @@ def main() -> None:
             min-width: 0 !important;
             overflow: hidden !important;
           }
-          /* Breathing room between the green row and the "Top 5 ▼" caption.
-             Targets the caption that immediately follows the first mover row. */
+          /* Tight breathing room between the green row and the "Top 5 ▼"
+             caption — visible separation without any wasted vertical space. */
           [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
             + [data-testid="stLayoutWrapper"]
             + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
-            margin-top: 0.5rem !important;
+            margin-top: 0.15rem !important;
           }
           [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
             + [data-testid="stLayoutWrapper"]

@@ -230,11 +230,19 @@ def _render_movers_strip(
         t = max(0.0, min(1.0, percentile / 100.0))
         return pc.sample_colorscale(color_scale, [t])[0]
 
-    def _row(label: str, subset: pd.DataFrame) -> None:
+    def _row(label: str, subset: pd.DataFrame, *, direction: str) -> None:
         st.caption(label)
         # Marker so the mobile CSS can keep all 5 cards in one
         # horizontally-scrollable row instead of stacking them.
-        st.markdown('<div data-mover-strip="true"></div>', unsafe_allow_html=True)
+        # `data-mover-row` distinguishes the upper (▲) and lower (▼) rows
+        # so CSS can apply different bottom-padding to each — the upper
+        # row sits above the ▼ caption (no chart), so it can be tighter,
+        # while the lower row sits above the heatmap chart and needs
+        # more padding to keep the bracket curves from being clipped.
+        st.markdown(
+            f'<div data-mover-strip="true" data-mover-row="{direction}"></div>',
+            unsafe_allow_html=True,
+        )
         cols = st.columns(n)
         for col, (_, row) in zip(cols, subset.iterrows()):
             pct = row["return_pct"]
@@ -256,8 +264,8 @@ def _render_movers_strip(
                 unsafe_allow_html=True,
             )
 
-    _row(f"Top {n} ▲", df.nlargest(n, "return_pct"))
-    _row(f"Top {n} ▼", df.nsmallest(n, "return_pct"))
+    _row(f"Top {n} ▲", df.nlargest(n, "return_pct"), direction="up")
+    _row(f"Top {n} ▼", df.nsmallest(n, "return_pct"), direction="down")
 
 
 # ---------------------------------------------------------------------------

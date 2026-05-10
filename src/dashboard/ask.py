@@ -713,9 +713,9 @@ def render_ask_tab(
         unsafe_allow_html=True,
     )
     st.caption(
-        "📊 Covers **daily historical price + volume** data for ~600 "
-        "large-cap U.S. stocks across major indices. Designed for analysis "
-        "of market behavior, not forecasting future performance."
+        "📊 Explore **daily historical price + volume** data across the "
+        "S&P 500, NASDAQ-100, and Dow 30 — built for market analysis and "
+        "trend exploration, not forecasting future performance."
     )
 
 
