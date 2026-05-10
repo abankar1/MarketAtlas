@@ -22,6 +22,7 @@ import datetime as dt
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 
 
@@ -52,6 +53,7 @@ from src.dashboard.news import render_news_tab  # noqa: E402
 from src.dashboard.prefs import load_prefs, save_prefs  # noqa: E402
 from src.dashboard.sector_synopsis import render_sector_synopsis_tab  # noqa: E402
 from src.dashboard.stock_detail import render_stock_detail  # noqa: E402
+from src.db.repositories import log_usage_event  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +130,7 @@ def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None
     st.session_state["date_to"]   = max(min_day, min(d_to,   end_max_day))
 
 
-def _on_tab_click(tab_name: str) -> None:
+def _on_tab_click(tab_name: str, db_url: str = "") -> None:
     """on_click callback for custom tab navigation buttons."""
     prev = st.session_state.get("active_tab")
     st.session_state["active_tab"] = tab_name
@@ -143,6 +145,14 @@ def _on_tab_click(tab_name: str) -> None:
         file=sys.stderr,
         flush=True,
     )
+    if db_url:
+        log_usage_event(
+            db_url,
+            session_id=st.session_state.get("_session_id", "unknown"),
+            event_type="tab_change",
+            from_tab=prev,
+            to_tab=tab_name,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +208,9 @@ def main() -> None:
     # gating on session_state ensures one app-load line per browser session,
     # not one per rerun.
     if not st.session_state.get("_app_loaded_logged"):
+        # Stable per-browser-session id; reused for every usage-events row
+        # we write so analytics queries can group by session.
+        st.session_state["_session_id"] = str(uuid.uuid4())
         print(
             f"[app] {dt.datetime.now().isoformat(timespec='seconds')} "
             f"new session loaded — Streamlit started serving Market Atlas",
@@ -615,6 +628,23 @@ def main() -> None:
         )
         st.stop()
 
+    # Persist a 'session_load' usage event once per browser session. We do
+    # this here (not next to the stderr log up top) because db_url isn't
+    # loaded that early in main(). Best-effort — log_usage_event swallows
+    # all errors so a flaky DB can't block the dashboard from rendering.
+    #
+    # to_tab captures the *initial* tab the user lands on so analytics can
+    # see "default-tab views" even when the user never clicks. Hardcoded to
+    # "Heatmap" — the default in the _TABS init below.
+    if not st.session_state.get("_app_load_persisted"):
+        log_usage_event(
+            db_url,
+            session_id=st.session_state.get("_session_id", "unknown"),
+            event_type="session_load",
+            to_tab="Heatmap",
+        )
+        st.session_state["_app_load_persisted"] = True
+
     # Construct the Anthropic client once per page render. None if no key
     # is configured — the Ask tab renders a friendly warning in that case.
     ai_client = None
@@ -802,7 +832,7 @@ def main() -> None:
             type="primary" if st.session_state["active_tab"] == _tab_name else "secondary",
             use_container_width=True,
             on_click=_on_tab_click,
-            kwargs={"tab_name": _tab_name},
+            kwargs={"tab_name": _tab_name, "db_url": db_url},
         )
 
     # Mobile tab-reveal hint: a CSS class is added to <body> on the rerun
