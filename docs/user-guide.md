@@ -14,6 +14,7 @@ it through an interactive Streamlit dashboard.
 - Pull up a candlestick chart for any individual stock with technical overlays
 - Compare up to 5 stocks on a normalised performance chart
 - Read recent per-symbol news headlines with sentiment scoring
+- **Ask plain-English questions** ("top 10 NASDAQ-100 movers this week", "how is NVDA doing?") and get an answer plus the data
 - Keep your constituent lists automatically up to date as stocks are added or removed from indices
 - Run a daily update that fetches the latest prices for everything in your database
 
@@ -149,15 +150,35 @@ Marketaux's free tier is 100 requests/day. Headlines are cached per-symbol for 1
 
 ---
 
-### Index Overlap Tab
+### Ask AI Tab
 
-Shows how symbols are distributed across S&P 500, NASDAQ-100, and Dow 30.
+Ask questions in plain English and get an answer plus the data. Example:
+*"Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?"*
 
-- **Headline metrics** — total unique symbols, and the count per index
-- **Cross-membership bar chart** — seven mutual-exclusion buckets (e.g. "S&P 500 + NASDAQ-100" for stocks in both but not Dow 30)
-- **Symbol tables** — expandable per-bucket table with symbol, name, and sector
+**Example chips**
+Six pre-canned questions cover the most common shapes — sector returns, single-stock volume, top movers, daily-volume spikes, sector performance, and stocks down sharply. Tap one to run it immediately.
 
-Most useful when working in the "All" universe.
+**Chat input**
+Type any question and press Enter. Each answer comes with:
+- A 1-line plain-English summary at the top
+- The result table (sortable, capped at 1,000 rows)
+- A "cached" badge if the AI decision came from cache (no new API call)
+- A row count and duration in milliseconds
+
+**Multi-turn memory**
+The last few turns are carried into each new question, so follow-ups work:
+
+- *"Show me the top 5 NASDAQ-100 movers this week"* → returns a list
+- *"Now show their average volume"* → resolves "their" to the symbols just listed
+- *"What about over 90 days?"* → keeps the same symbols, swaps the window
+
+Click **Clear history** to drop the memory and start fresh.
+
+**Scope**
+The disclaimer just above the chat input sums it up: a decade of daily price + volume for the S&P 500, NASDAQ-100, and Dow 30 (~600 stocks). The AI will refuse out-of-scope questions like fundamentals (P/E, market cap), forecasts, news, sentiment, options, and intraday data — those simply aren't in the database.
+
+**Configuration**
+Requires `anthropic_api_key` (Claude API) and `db_url_readonly` (a Postgres role with SELECT-only privileges) in the config. The Ask AI tab can't write to the database — its SQL is validated and runs with a 15-second timeout on a read-only connection.
 
 ---
 
