@@ -46,13 +46,26 @@ from src.db.readonly import (
 from src.db.repositories import log_nl_query
 
 
-EXAMPLE_QUESTIONS = [
+# Desktop sees the full sentence-form examples — fits two columns at
+# breathing-room width, doubles as a hint of how the AI handles natural
+# phrasing. Mobile gets a tighter set of four shorter labels because at
+# 375px wide the long ones wrap to two lines and eat the viewport before
+# any answer renders. Both lists are rendered server-side; CSS in
+# render_ask_tab() hides the wrong set per viewport.
+EXAMPLE_QUESTIONS_DESKTOP = [
     "Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?",
     "What's the average daily volume for NVDA over the past 90 days?",
     "Show me the top 10 NASDAQ-100 stocks by return over the past week.",
     "How is Information Technology performing this month?",
     "Which stocks are down more than 20% this quarter?",
     "Find symbols where today's volume is at least 3x the 20-day average.",
+]
+
+EXAMPLE_QUESTIONS_MOBILE = [
+    "Health Care stocks up >10% in 30 days",
+    "NVDA average daily volume — last 90 days",
+    "Top 10 NASDAQ-100 movers this week",
+    "Stocks down more than 20% this quarter",
 ]
 
 
@@ -586,18 +599,101 @@ def render_ask_tab(
         # "their names" or "drop the bottom 3" resolve when last_ticker
         # alone isn't enough (multi-stock previous results clear it).
         st.session_state.ask_recent_turns = []
+    if "_ask_scroll_pending" not in st.session_state:
+        # One-shot flag — set right before st.rerun() when a new query has
+        # been appended, consumed on the next render to emit a scrollIntoView
+        # call so the user lands on the freshly-added answer rather than
+        # wherever the previous scroll position left them.
+        st.session_state["_ask_scroll_pending"] = False
 
     # ---- Example chips — click to run immediately ----
     # chat_input doesn't accept programmatic prefill, so a chip click sets a
     # "pending example" sentinel that we run later in the function (after
     # chat_input has rendered).
-    st.markdown("**Example questions:**")
-    chip_cols = st.columns(2)
-    for i, ex in enumerate(EXAMPLE_QUESTIONS):
-        with chip_cols[i % 2]:
-            if st.button(ex, key=f"ask_ex_{i}", use_container_width=True):
-                st.session_state["_ask_pending_example"] = ex
-                st.rerun()
+    #
+    # Both desktop and mobile chip sets are rendered, then CSS hides the
+    # wrong one per viewport. Streamlit can't gate render on viewport
+    # width server-side; both sets in the DOM costs ~10 hidden buttons
+    # (negligible) but means no flash-of-wrong-set on first paint because
+    # the @media rule is in <head> before the chips parse.
+    # Streamlit wraps each st.markdown call in
+    # stVerticalBlock > stElementContainer > stMarkdown — note the
+    # stElementContainer layer that sits between the container's
+    # stVerticalBlock and the stMarkdown. Selectors below thread through
+    # both layers so :has() locks onto the container's own
+    # stVerticalBlock and not the outer tab block (which would hide the
+    # entire Ask AI tab).
+    st.markdown(
+        """
+        <style>
+        /* Hide mobile chip set on screens >640px wide */
+        @media (min-width: 641px) {
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) {
+            display: none !important;
+          }
+        }
+        /* Hide desktop chip set on screens ≤640px wide */
+        @media (max-width: 640px) {
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-desktop]
+          ) {
+            display: none !important;
+          }
+          /* Tighten the mobile chip buttons — Streamlit's default
+             padding leaves chips ~40px tall, which still adds up across
+             four rows. Squeeze padding + zero the inner <p> margin so
+             the chip hugs its label. */
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) button {
+            padding: 0.2rem 0.6rem !important;
+            min-height: 0 !important;
+          }
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) button p {
+            margin: 0 !important;
+            line-height: 1.3 !important;
+          }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Desktop chip set — long sentence-form examples in 2 columns.
+    with st.container():
+        st.markdown(
+            '<div data-ask-examples-desktop="true"></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("**Example questions:**")
+        chip_cols = st.columns(2)
+        for i, ex in enumerate(EXAMPLE_QUESTIONS_DESKTOP):
+            with chip_cols[i % 2]:
+                if st.button(ex, key=f"ask_ex_d_{i}", use_container_width=True):
+                    st.session_state["_ask_pending_example"] = ex
+                    st.rerun()
+
+    # Mobile chip set — four shorter examples, each fits a single line.
+    with st.container():
+        st.markdown(
+            '<div data-ask-examples-mobile="true"></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("**Example questions:**")
+        chip_cols_m = st.columns(2)
+        for i, ex in enumerate(EXAMPLE_QUESTIONS_MOBILE):
+            with chip_cols_m[i % 2]:
+                if st.button(ex, key=f"ask_ex_m_{i}", use_container_width=True):
+                    st.session_state["_ask_pending_example"] = ex
+                    st.rerun()
 
     # ---- Input — st.chat_input gives us Enter-to-submit natively ----
     # Trade-off: chat_input is single-line (no Shift+Enter newline support).
@@ -694,13 +790,105 @@ def render_ask_tab(
                     st.session_state.ask_recent_turns = (
                         st.session_state.ask_recent_turns[-MAX_TURNS:]
                     )
+            # Trigger scroll-to-newest on the next render so the user lands
+            # on the answer they just asked for, instead of the page scroll
+            # staying wherever it was when they hit Enter.
+            st.session_state["_ask_scroll_pending"] = True
             st.rerun()
 
-    # ---- Render history (oldest first, newest at bottom — chat-style) ----
+    # ---- Render history (chat-style: oldest first, newest at the bottom) ----
     if st.session_state.ask_history:
         st.markdown("---")
         for i, entry in enumerate(st.session_state.ask_history[-10:]):
             _render_history_entry(entry, idx=i)
+        # Anchor placed AFTER the newest entry so the scroll-to-bottom
+        # snippet below can bring the freshly rendered answer flush with
+        # the bottom of the visible content area (just above the pinned
+        # chat input).
+        st.markdown(
+            '<div id="ask-history-bottom" style="scroll-margin-bottom: 0.5rem;"></div>',
+            unsafe_allow_html=True,
+        )
+
+    # ---- One-shot scroll-to-newest after submission ----
+    # Streamlit reruns from the top of the script and does not preserve or
+    # adjust the page scroll position. Without this, the new answer lands at
+    # the bottom of the history block but the viewport stays where it was —
+    # often showing the example chips or an older entry. The components.html
+    # iframe runs a small script in the parent document to bring the trailing
+    # anchor into view, scrolling the page just far enough that the latest
+    # Q/A sits above the bottom-pinned chat input.
+    if st.session_state.get("_ask_scroll_pending") and st.session_state.ask_history:
+        st.session_state["_ask_scroll_pending"] = False
+        import streamlit.components.v1 as components
+
+        components.html(
+            """
+            <script>
+              (function () {
+                const doc = window.parent.document;
+
+                // Streamlit nests the page inside its own scroll container
+                // (data-testid="stAppScrollToBottomContainer"). Native
+                // scrollIntoView({behavior:'smooth'}) silently no-ops on
+                // that container, and the document-level smooth-scroll API
+                // doesn't reach into it either. So we drive scrollTop
+                // ourselves via requestAnimationFrame with an easing curve.
+                function easeInOutCubic(t) {
+                  return t < 0.5
+                    ? 4 * t * t * t
+                    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+                }
+
+                function smoothScrollTo(container, target, duration) {
+                  const start = container.scrollTop;
+                  const delta = target - start;
+                  if (Math.abs(delta) < 2) return;
+                  const t0 = performance.now();
+                  function step(now) {
+                    const t = Math.min(1, (now - t0) / duration);
+                    container.scrollTop = start + delta * easeInOutCubic(t);
+                    if (t < 1) requestAnimationFrame(step);
+                  }
+                  requestAnimationFrame(step);
+                }
+
+                // Retry briefly — the anchor div is rendered earlier in the
+                // same rerun, but Streamlit mounts iframe children in a
+                // separate pass so the parent DOM may not have settled yet.
+                let tries = 0;
+                const tick = setInterval(function () {
+                  const anchor = doc.getElementById('ask-history-bottom');
+                  const container = doc.querySelector(
+                    '[data-testid="stAppScrollToBottomContainer"]'
+                  );
+                  if (anchor && container) {
+                    // Position where anchor's bottom aligns with the
+                    // container's bottom (matches block:'end'). The latest
+                    // answer ends up just above the chat-input bar on both
+                    // desktop and mobile.
+                    const anchorRect = anchor.getBoundingClientRect();
+                    const containerRect = container.getBoundingClientRect();
+                    const anchorTopInContent =
+                      anchorRect.top - containerRect.top + container.scrollTop;
+                    const target =
+                      anchorTopInContent + anchor.offsetHeight
+                        - container.clientHeight;
+                    const clamped = Math.max(
+                      0,
+                      Math.min(target, container.scrollHeight - container.clientHeight)
+                    );
+                    smoothScrollTo(container, clamped, 350);
+                    clearInterval(tick);
+                  } else if (++tries > 20) {
+                    clearInterval(tick);
+                  }
+                }, 50);
+              })();
+            </script>
+            """,
+            height=0,
+        )
 
     # ---- Scope disclaimer ----
     # The disclaimer is the last in-flow element. Without intervention it
