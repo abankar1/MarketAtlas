@@ -237,32 +237,6 @@ def main() -> None:
           display: none !important;
         }
 
-        /* Ask tab disclaimer: push the scope disclaimer (paired with a
-           marker DIV right before it in render_ask_tab) to the bottom of
-           the main content area so it sits just above the sticky
-           chat_input bar instead of floating below the Clear-history
-           button with a large empty gap. The :has() selector means this
-           only applies to the Ask AI tab — other tabs don't render the
-           marker, so their layouts are untouched. */
-        [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] div[data-ask-disclaimer-anchor="true"]) {
-          /* Subtract just the desktop chat_input bar height (~140px) so
-             the parent's bottom edge lands flush against the chat input —
-             disclaimer hugs the input bar via flex push. */
-          min-height: calc(100vh - 145px);
-          display: flex;
-          flex-direction: column;
-        }
-        @media (max-width: 640px) {
-          /* Mobile chat_input is taller (~44px more — bigger touch targets
-             + iOS safe-area inset). Reserve correspondingly more space. */
-          [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] div[data-ask-disclaimer-anchor="true"]) {
-            min-height: calc(100vh - 200px);
-          }
-        }
-        [data-testid="stVerticalBlock"]
-          > [data-testid="stElementContainer"]:has(div[data-ask-disclaimer-anchor="true"]) {
-          margin-top: auto;
-        }
 
         /* Mover-strip: pull ticker cards close to the "Top 5" caption on desktop.
            Mobile has its own spacing rules inside the @media block below. */

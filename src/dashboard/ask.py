@@ -46,13 +46,26 @@ from src.db.readonly import (
 from src.db.repositories import log_nl_query
 
 
-EXAMPLE_QUESTIONS = [
+# Desktop sees the full sentence-form examples — fits two columns at
+# breathing-room width, doubles as a hint of how the AI handles natural
+# phrasing. Mobile gets a tighter set of four shorter labels because at
+# 375px wide the long ones wrap to two lines and eat the viewport before
+# any answer renders. Both lists are rendered server-side; CSS in
+# render_ask_tab() hides the wrong set per viewport.
+EXAMPLE_QUESTIONS_DESKTOP = [
     "Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?",
     "What's the average daily volume for NVDA over the past 90 days?",
     "Show me the top 10 NASDAQ-100 stocks by return over the past week.",
     "How is Information Technology performing this month?",
     "Which stocks are down more than 20% this quarter?",
     "Find symbols where today's volume is at least 3x the 20-day average.",
+]
+
+EXAMPLE_QUESTIONS_MOBILE = [
+    "Health Care stocks up >10% in 30 days",
+    "NVDA average daily volume — last 90 days",
+    "Top 10 NASDAQ-100 movers this week",
+    "Stocks down more than 20% this quarter",
 ]
 
 
@@ -586,16 +599,169 @@ def render_ask_tab(
         # "their names" or "drop the bottom 3" resolve when last_ticker
         # alone isn't enough (multi-stock previous results clear it).
         st.session_state.ask_recent_turns = []
+    if "_ask_scroll_pending" not in st.session_state:
+        # One-shot flag — set right before st.rerun() when a new query has
+        # been appended, consumed on the next render to emit a scrollIntoView
+        # call so the user lands on the freshly-added answer rather than
+        # wherever the previous scroll position left them.
+        st.session_state["_ask_scroll_pending"] = False
+
+    # ---- Scope disclaimer ----
+    # Welcome-banner pattern — sits at the top of the tab where users
+    # naturally look for context. Scrolls away as conversation grows
+    # so it never crowds the input. Same on desktop and mobile.
+    st.caption(
+        "📊 Explore **daily historical price + volume** data across the "
+        "S&P 500, NASDAQ-100, and Dow 30 — built for market analysis and "
+        "trend exploration, not forecasting future performance."
+    )
 
     # ---- Example chips — click to run immediately ----
     # chat_input doesn't accept programmatic prefill, so a chip click sets a
     # "pending example" sentinel that we run later in the function (after
     # chat_input has rendered).
-    st.markdown("**Example questions:**")
-    chip_cols = st.columns(2)
-    for i, ex in enumerate(EXAMPLE_QUESTIONS):
-        with chip_cols[i % 2]:
-            if st.button(ex, key=f"ask_ex_{i}", use_container_width=True):
+    #
+    # Both desktop and mobile chip sets are rendered, then CSS hides the
+    # wrong one per viewport. Streamlit can't gate render on viewport
+    # width server-side; both sets in the DOM costs ~10 hidden buttons
+    # (negligible) but means no flash-of-wrong-set on first paint because
+    # the @media rule is in <head> before the chips parse.
+    # Streamlit wraps each st.markdown call in
+    # stVerticalBlock > stElementContainer > stMarkdown — note the
+    # stElementContainer layer that sits between the container's
+    # stVerticalBlock and the stMarkdown. Selectors below thread through
+    # both layers so :has() locks onto the container's own
+    # stVerticalBlock and not the outer tab block (which would hide the
+    # entire Ask AI tab).
+    st.markdown(
+        """
+        <style>
+        /* Chat-style "AI is thinking" indicator — three pulsing dots
+           that replace the default st.spinner while the AI roundtrip
+           runs. Pure CSS animation keeps the dots moving smoothly even
+           though Streamlit's script is blocked on the network call. */
+        .ask-thinking {
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+          padding: 0.2rem 0;
+        }
+        .ask-thinking-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #ff4b4b;
+          animation: ask-thinking-pulse 1.4s infinite ease-in-out both;
+        }
+        .ask-thinking-dot:nth-child(1) { animation-delay: -0.32s; }
+        .ask-thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes ask-thinking-pulse {
+          0%, 80%, 100% { transform: scale(0); opacity: 0.35; }
+          40%           { transform: scale(1); opacity: 1; }
+        }
+        .ask-thinking-text {
+          color: rgba(0, 0, 0, 0.55);
+          font-size: 0.85rem;
+          font-style: italic;
+          margin-left: 0.35rem;
+        }
+
+        /* Hide mobile chip set on screens >640px wide */
+        @media (min-width: 641px) {
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) {
+            display: none !important;
+          }
+        }
+        /* Hide desktop chip set on screens ≤640px wide */
+        @media (max-width: 640px) {
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-desktop]
+          ) {
+            display: none !important;
+          }
+          /* Heading rendered inline with the marker DIV — bold, tight
+             margin so it doesn't add extra space above the chip stack. */
+          .ask-examples-mobile-heading {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin: 0 0 0.35rem 0;
+          }
+          /* Tighten the mobile chip buttons — Streamlit's default
+             padding leaves chips ~40px tall, which still adds up across
+             four rows. Squeeze padding + zero the inner <p> margin so
+             the chip hugs its label. */
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) button,
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-clear-history]
+          ) button {
+            padding: 0.2rem 0.6rem !important;
+            min-height: 0 !important;
+          }
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) button p,
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-clear-history]
+          ) button p {
+            margin: 0 !important;
+            line-height: 1.3 !important;
+          }
+          /* Tighten vertical spacing between sequential chip buttons in
+             the mobile stack. Streamlit's stElementContainer adds default
+             margin between siblings; reduce it inside the mobile chip
+             container so the four chips sit close together. */
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) > [data-testid="stElementContainer"] {
+            margin-bottom: 0.25rem !important;
+          }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Desktop chip set — long sentence-form examples in 2 columns.
+    with st.container():
+        st.markdown(
+            '<div data-ask-examples-desktop="true"></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("**Example questions:**")
+        chip_cols = st.columns(2)
+        for i, ex in enumerate(EXAMPLE_QUESTIONS_DESKTOP):
+            with chip_cols[i % 2]:
+                if st.button(ex, key=f"ask_ex_d_{i}", use_container_width=True):
+                    st.session_state["_ask_pending_example"] = ex
+                    st.rerun()
+
+    # Mobile chip set — four shorter examples in a single tight stack.
+    # No st.columns: collapsing two columns on mobile leaves a wider gap
+    # between rows than between sequential buttons in a single stack, so
+    # the user sees an uneven 1-2 / 2-3 / 3-4 spacing pattern. Combining
+    # the marker with the header in one st.markdown call also drops the
+    # empty stMarkdown wrapper that was adding visible padding above
+    # "Example questions:".
+    with st.container():
+        st.markdown(
+            '<div data-ask-examples-mobile="true"></div>'
+            '<div class="ask-examples-mobile-heading">'
+            'Example questions:</div>',
+            unsafe_allow_html=True,
+        )
+        for i, ex in enumerate(EXAMPLE_QUESTIONS_MOBILE):
+            if st.button(ex, key=f"ask_ex_m_{i}", use_container_width=True):
                 st.session_state["_ask_pending_example"] = ex
                 st.rerun()
 
@@ -621,6 +787,12 @@ def render_ask_tab(
         clear_cache_col = None
 
     with clear_history_col:
+        # Marker pairs with mobile-only CSS to shrink the button to chip
+        # size on small screens.
+        st.markdown(
+            '<div data-ask-clear-history="true"></div>',
+            unsafe_allow_html=True,
+        )
         if st.button("Clear history", use_container_width=True):
             st.session_state.ask_history = []
             st.session_state.ask_last_ticker = None
@@ -642,81 +814,234 @@ def render_ask_tab(
                 clear_ai_cache()
                 st.rerun()
 
-    # ---- Run query — either chat_input submission or chip click ----
-    # chat_input returns the submitted text on the rerun after Enter,
-    # otherwise None. Chip clicks set _ask_pending_example for one rerun.
+    # ---- Resolve pending input (chat_input or chip click) ----
+    # We compute pending here but DEFER the actual query execution until
+    # AFTER history rendering below. Reason: the optimistic "Thinking…"
+    # card is rendered inline at the position of the _run_query call,
+    # so it must come AFTER existing history to land at the bottom of
+    # the conversation (chat-style) instead of floating above older
+    # entries.
     pending = submitted or st.session_state.pop("_ask_pending_example", None)
+    pending_trimmed: str | None = None
     if pending:
-        trimmed = pending.strip()
-        if len(trimmed) < _MIN_CHARS:
+        candidate = pending.strip()
+        if len(candidate) < _MIN_CHARS:
             st.warning(
                 f"Please ask a longer question (at least {_MIN_CHARS} characters)."
             )
         else:
-            with st.spinner("Asking AI..."):
-                outcome = _run_query(
-                    trimmed, ai_client, db_url_readonly, db_url,
-                    last_ticker=st.session_state.ask_last_ticker,
-                    recent_turns=tuple(st.session_state.ask_recent_turns),
-                )
-            st.session_state.ask_history.append(
-                {"question": trimmed, "outcome": outcome}
-            )
-            # Update the conversational anchor: only carry forward when the
-            # query unambiguously narrowed to a single ticker. Multi-stock,
-            # sector, and index queries clear it so a follow-up doesn't
-            # silently pin to a stale stock.
-            if outcome.get("ok") and outcome.get("sql"):
-                ticker = extract_single_ticker(outcome["sql"])
-                st.session_state.ask_last_ticker = ticker
+            pending_trimmed = candidate
 
-            # Update the multi-turn transcript window (used for referential
-            # follow-ups beyond a single ticker). Only push successful turns
-            # — failed/timeout ones aren't useful context. Cap at MAX_TURNS.
-            if outcome.get("ok"):
-                from src.ai.memory import (
-                    ConversationTurn, MAX_TURNS, extract_top_symbols,
-                )
-                r = outcome.get("result")
-                top_symbols: tuple[str, ...] = ()
-                if r is not None:
-                    top_symbols = extract_top_symbols(
-                        list(r.columns), list(r.rows),
-                    )
-                summary = (outcome.get("narrative") or "").strip()
-                turn = ConversationTurn(
-                    question=trimmed,
-                    top_symbols=top_symbols,
-                    summary=summary,
-                )
-                st.session_state.ask_recent_turns.append(turn)
-                if len(st.session_state.ask_recent_turns) > MAX_TURNS:
-                    st.session_state.ask_recent_turns = (
-                        st.session_state.ask_recent_turns[-MAX_TURNS:]
-                    )
-            st.rerun()
-
-    # ---- Render history (oldest first, newest at bottom — chat-style) ----
+    # ---- Render history (chat-style: oldest first, newest at the bottom) ----
     if st.session_state.ask_history:
         st.markdown("---")
         for i, entry in enumerate(st.session_state.ask_history[-10:]):
             _render_history_entry(entry, idx=i)
+        # Anchor placed AFTER the newest entry so the scroll-to-bottom
+        # snippet below can bring the freshly rendered answer flush with
+        # the bottom of the visible content area (just above the pinned
+        # chat input).
+        st.markdown(
+            '<div id="ask-history-bottom" style="scroll-margin-bottom: 0.5rem;"></div>',
+            unsafe_allow_html=True,
+        )
 
-    # ---- Scope disclaimer ----
-    # The disclaimer is the last in-flow element. Without intervention it
-    # sticks to whatever immediately precedes it (the Clear-history button)
-    # and leaves a huge gap to the sticky chat_input bar at the bottom.
-    # The marker DIV below pairs with CSS in app.py to flex-push it to the
-    # bottom of the main content area so it sits just above the chat input.
-    st.markdown(
-        '<div data-ask-disclaimer-anchor="true"></div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "📊 Explore **daily historical price + volume** data across the "
-        "S&P 500, NASDAQ-100, and Dow 30 — built for market analysis and "
-        "trend exploration, not forecasting future performance."
-    )
+    # ---- Run pending query (deferred from above) ----
+    # The thinking-card rendering happens here so it lands BELOW any
+    # existing history entries — the visual position where the new
+    # answer will appear after the rerun. Streamlit paints in document
+    # order so the card is visible the instant the user submits, then
+    # the AI roundtrip runs synchronously while the CSS dots animate.
+    if pending_trimmed is not None:
+        trimmed = pending_trimmed
+        thinking = st.empty()
+        with thinking.container():
+            with st.container(border=True):
+                st.markdown(f"**Q:** {trimmed}")
+                st.markdown(
+                    '<div class="ask-thinking">'
+                    '<div class="ask-thinking-dot"></div>'
+                    '<div class="ask-thinking-dot"></div>'
+                    '<div class="ask-thinking-dot"></div>'
+                    '<span class="ask-thinking-text">Thinking…</span>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+        # Pre-query scroll: bring the freshly rendered thinking card
+        # into view BEFORE the AI roundtrip blocks the script. Without
+        # this the user clicks submit, the page stays where it was, and
+        # only the post-answer scroll repositions them — they miss the
+        # "their question was received" feedback. Same rAF easing as
+        # the post-answer scroll for a consistent feel.
+        import streamlit.components.v1 as components
+        components.html(
+            """
+            <script>
+              (function () {
+                const doc = window.parent.document;
+                function easeInOutCubic(t) {
+                  return t < 0.5
+                    ? 4 * t * t * t
+                    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+                }
+                let tries = 0;
+                const tick = setInterval(function () {
+                  const container = doc.querySelector(
+                    '[data-testid="stAppScrollToBottomContainer"]'
+                  );
+                  if (container) {
+                    const start = container.scrollTop;
+                    const target =
+                      container.scrollHeight - container.clientHeight;
+                    const delta = target - start;
+                    if (Math.abs(delta) < 2) { clearInterval(tick); return; }
+                    const t0 = performance.now();
+                    function step(now) {
+                      const t = Math.min(1, (now - t0) / 350);
+                      container.scrollTop =
+                        start + delta * easeInOutCubic(t);
+                      if (t < 1) requestAnimationFrame(step);
+                    }
+                    requestAnimationFrame(step);
+                    clearInterval(tick);
+                  } else if (++tries > 20) {
+                    clearInterval(tick);
+                  }
+                }, 50);
+              })();
+            </script>
+            """,
+            height=0,
+        )
+
+        outcome = _run_query(
+            trimmed, ai_client, db_url_readonly, db_url,
+            last_ticker=st.session_state.ask_last_ticker,
+            recent_turns=tuple(st.session_state.ask_recent_turns),
+        )
+        thinking.empty()
+        st.session_state.ask_history.append(
+            {"question": trimmed, "outcome": outcome}
+        )
+        # Update the conversational anchor: only carry forward when the
+        # query unambiguously narrowed to a single ticker. Multi-stock,
+        # sector, and index queries clear it so a follow-up doesn't
+        # silently pin to a stale stock.
+        if outcome.get("ok") and outcome.get("sql"):
+            ticker = extract_single_ticker(outcome["sql"])
+            st.session_state.ask_last_ticker = ticker
+
+        # Update the multi-turn transcript window (used for referential
+        # follow-ups beyond a single ticker). Only push successful turns
+        # — failed/timeout ones aren't useful context. Cap at MAX_TURNS.
+        if outcome.get("ok"):
+            from src.ai.memory import (
+                ConversationTurn, MAX_TURNS, extract_top_symbols,
+            )
+            r = outcome.get("result")
+            top_symbols: tuple[str, ...] = ()
+            if r is not None:
+                top_symbols = extract_top_symbols(
+                    list(r.columns), list(r.rows),
+                )
+            summary = (outcome.get("narrative") or "").strip()
+            turn = ConversationTurn(
+                question=trimmed,
+                top_symbols=top_symbols,
+                summary=summary,
+            )
+            st.session_state.ask_recent_turns.append(turn)
+            if len(st.session_state.ask_recent_turns) > MAX_TURNS:
+                st.session_state.ask_recent_turns = (
+                    st.session_state.ask_recent_turns[-MAX_TURNS:]
+                )
+        # Trigger scroll-to-newest on the next render so the user lands
+        # on the answer they just asked for, instead of the page scroll
+        # staying wherever it was when they hit Enter.
+        st.session_state["_ask_scroll_pending"] = True
+        st.rerun()
+
+    # ---- One-shot scroll-to-newest after submission ----
+    # Streamlit reruns from the top of the script and does not preserve or
+    # adjust the page scroll position. Without this, the new answer lands at
+    # the bottom of the history block but the viewport stays where it was —
+    # often showing the example chips or an older entry. The components.html
+    # iframe runs a small script in the parent document to bring the trailing
+    # anchor into view, scrolling the page just far enough that the latest
+    # Q/A sits above the bottom-pinned chat input.
+    if st.session_state.get("_ask_scroll_pending") and st.session_state.ask_history:
+        st.session_state["_ask_scroll_pending"] = False
+        import streamlit.components.v1 as components
+
+        components.html(
+            """
+            <script>
+              (function () {
+                const doc = window.parent.document;
+
+                // Streamlit nests the page inside its own scroll container
+                // (data-testid="stAppScrollToBottomContainer"). Native
+                // scrollIntoView({behavior:'smooth'}) silently no-ops on
+                // that container, and the document-level smooth-scroll API
+                // doesn't reach into it either. So we drive scrollTop
+                // ourselves via requestAnimationFrame with an easing curve.
+                function easeInOutCubic(t) {
+                  return t < 0.5
+                    ? 4 * t * t * t
+                    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+                }
+
+                function smoothScrollTo(container, target, duration) {
+                  const start = container.scrollTop;
+                  const delta = target - start;
+                  if (Math.abs(delta) < 2) return;
+                  const t0 = performance.now();
+                  function step(now) {
+                    const t = Math.min(1, (now - t0) / duration);
+                    container.scrollTop = start + delta * easeInOutCubic(t);
+                    if (t < 1) requestAnimationFrame(step);
+                  }
+                  requestAnimationFrame(step);
+                }
+
+                // Retry briefly — the anchor div is rendered earlier in the
+                // same rerun, but Streamlit mounts iframe children in a
+                // separate pass so the parent DOM may not have settled yet.
+                let tries = 0;
+                const tick = setInterval(function () {
+                  const anchor = doc.getElementById('ask-history-bottom');
+                  const container = doc.querySelector(
+                    '[data-testid="stAppScrollToBottomContainer"]'
+                  );
+                  if (anchor && container) {
+                    // Position where anchor's bottom aligns with the
+                    // container's bottom (matches block:'end'). The latest
+                    // answer ends up just above the chat-input bar on both
+                    // desktop and mobile.
+                    const anchorRect = anchor.getBoundingClientRect();
+                    const containerRect = container.getBoundingClientRect();
+                    const anchorTopInContent =
+                      anchorRect.top - containerRect.top + container.scrollTop;
+                    const target =
+                      anchorTopInContent + anchor.offsetHeight
+                        - container.clientHeight;
+                    const clamped = Math.max(
+                      0,
+                      Math.min(target, container.scrollHeight - container.clientHeight)
+                    );
+                    smoothScrollTo(container, clamped, 350);
+                    clearInterval(tick);
+                  } else if (++tries > 20) {
+                    clearInterval(tick);
+                  }
+                }, 50);
+              })();
+            </script>
+            """,
+            height=0,
+        )
+
 
 
 def _render_history_entry(entry: dict, idx: int) -> None:
