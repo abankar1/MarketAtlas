@@ -636,6 +636,36 @@ def render_ask_tab(
     st.markdown(
         """
         <style>
+        /* Chat-style "AI is thinking" indicator — three pulsing dots
+           that replace the default st.spinner while the AI roundtrip
+           runs. Pure CSS animation keeps the dots moving smoothly even
+           though Streamlit's script is blocked on the network call. */
+        .ask-thinking {
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+          padding: 0.2rem 0;
+        }
+        .ask-thinking-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #ff4b4b;
+          animation: ask-thinking-pulse 1.4s infinite ease-in-out both;
+        }
+        .ask-thinking-dot:nth-child(1) { animation-delay: -0.32s; }
+        .ask-thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes ask-thinking-pulse {
+          0%, 80%, 100% { transform: scale(0); opacity: 0.35; }
+          40%           { transform: scale(1); opacity: 1; }
+        }
+        .ask-thinking-text {
+          color: rgba(0, 0, 0, 0.55);
+          font-size: 0.85rem;
+          font-style: italic;
+          margin-left: 0.35rem;
+        }
+
         /* Hide mobile chip set on screens >640px wide */
         @media (min-width: 641px) {
           [data-testid="stVerticalBlock"]:has(
@@ -784,63 +814,23 @@ def render_ask_tab(
                 clear_ai_cache()
                 st.rerun()
 
-    # ---- Run query — either chat_input submission or chip click ----
-    # chat_input returns the submitted text on the rerun after Enter,
-    # otherwise None. Chip clicks set _ask_pending_example for one rerun.
+    # ---- Resolve pending input (chat_input or chip click) ----
+    # We compute pending here but DEFER the actual query execution until
+    # AFTER history rendering below. Reason: the optimistic "Thinking…"
+    # card is rendered inline at the position of the _run_query call,
+    # so it must come AFTER existing history to land at the bottom of
+    # the conversation (chat-style) instead of floating above older
+    # entries.
     pending = submitted or st.session_state.pop("_ask_pending_example", None)
+    pending_trimmed: str | None = None
     if pending:
-        trimmed = pending.strip()
-        if len(trimmed) < _MIN_CHARS:
+        candidate = pending.strip()
+        if len(candidate) < _MIN_CHARS:
             st.warning(
                 f"Please ask a longer question (at least {_MIN_CHARS} characters)."
             )
         else:
-            with st.spinner("Asking AI..."):
-                outcome = _run_query(
-                    trimmed, ai_client, db_url_readonly, db_url,
-                    last_ticker=st.session_state.ask_last_ticker,
-                    recent_turns=tuple(st.session_state.ask_recent_turns),
-                )
-            st.session_state.ask_history.append(
-                {"question": trimmed, "outcome": outcome}
-            )
-            # Update the conversational anchor: only carry forward when the
-            # query unambiguously narrowed to a single ticker. Multi-stock,
-            # sector, and index queries clear it so a follow-up doesn't
-            # silently pin to a stale stock.
-            if outcome.get("ok") and outcome.get("sql"):
-                ticker = extract_single_ticker(outcome["sql"])
-                st.session_state.ask_last_ticker = ticker
-
-            # Update the multi-turn transcript window (used for referential
-            # follow-ups beyond a single ticker). Only push successful turns
-            # — failed/timeout ones aren't useful context. Cap at MAX_TURNS.
-            if outcome.get("ok"):
-                from src.ai.memory import (
-                    ConversationTurn, MAX_TURNS, extract_top_symbols,
-                )
-                r = outcome.get("result")
-                top_symbols: tuple[str, ...] = ()
-                if r is not None:
-                    top_symbols = extract_top_symbols(
-                        list(r.columns), list(r.rows),
-                    )
-                summary = (outcome.get("narrative") or "").strip()
-                turn = ConversationTurn(
-                    question=trimmed,
-                    top_symbols=top_symbols,
-                    summary=summary,
-                )
-                st.session_state.ask_recent_turns.append(turn)
-                if len(st.session_state.ask_recent_turns) > MAX_TURNS:
-                    st.session_state.ask_recent_turns = (
-                        st.session_state.ask_recent_turns[-MAX_TURNS:]
-                    )
-            # Trigger scroll-to-newest on the next render so the user lands
-            # on the answer they just asked for, instead of the page scroll
-            # staying wherever it was when they hit Enter.
-            st.session_state["_ask_scroll_pending"] = True
-            st.rerun()
+            pending_trimmed = candidate
 
     # ---- Render history (chat-style: oldest first, newest at the bottom) ----
     if st.session_state.ask_history:
@@ -855,6 +845,122 @@ def render_ask_tab(
             '<div id="ask-history-bottom" style="scroll-margin-bottom: 0.5rem;"></div>',
             unsafe_allow_html=True,
         )
+
+    # ---- Run pending query (deferred from above) ----
+    # The thinking-card rendering happens here so it lands BELOW any
+    # existing history entries — the visual position where the new
+    # answer will appear after the rerun. Streamlit paints in document
+    # order so the card is visible the instant the user submits, then
+    # the AI roundtrip runs synchronously while the CSS dots animate.
+    if pending_trimmed is not None:
+        trimmed = pending_trimmed
+        thinking = st.empty()
+        with thinking.container():
+            with st.container(border=True):
+                st.markdown(f"**Q:** {trimmed}")
+                st.markdown(
+                    '<div class="ask-thinking">'
+                    '<div class="ask-thinking-dot"></div>'
+                    '<div class="ask-thinking-dot"></div>'
+                    '<div class="ask-thinking-dot"></div>'
+                    '<span class="ask-thinking-text">Thinking…</span>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+        # Pre-query scroll: bring the freshly rendered thinking card
+        # into view BEFORE the AI roundtrip blocks the script. Without
+        # this the user clicks submit, the page stays where it was, and
+        # only the post-answer scroll repositions them — they miss the
+        # "their question was received" feedback. Same rAF easing as
+        # the post-answer scroll for a consistent feel.
+        import streamlit.components.v1 as components
+        components.html(
+            """
+            <script>
+              (function () {
+                const doc = window.parent.document;
+                function easeInOutCubic(t) {
+                  return t < 0.5
+                    ? 4 * t * t * t
+                    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+                }
+                let tries = 0;
+                const tick = setInterval(function () {
+                  const container = doc.querySelector(
+                    '[data-testid="stAppScrollToBottomContainer"]'
+                  );
+                  if (container) {
+                    const start = container.scrollTop;
+                    const target =
+                      container.scrollHeight - container.clientHeight;
+                    const delta = target - start;
+                    if (Math.abs(delta) < 2) { clearInterval(tick); return; }
+                    const t0 = performance.now();
+                    function step(now) {
+                      const t = Math.min(1, (now - t0) / 350);
+                      container.scrollTop =
+                        start + delta * easeInOutCubic(t);
+                      if (t < 1) requestAnimationFrame(step);
+                    }
+                    requestAnimationFrame(step);
+                    clearInterval(tick);
+                  } else if (++tries > 20) {
+                    clearInterval(tick);
+                  }
+                }, 50);
+              })();
+            </script>
+            """,
+            height=0,
+        )
+
+        outcome = _run_query(
+            trimmed, ai_client, db_url_readonly, db_url,
+            last_ticker=st.session_state.ask_last_ticker,
+            recent_turns=tuple(st.session_state.ask_recent_turns),
+        )
+        thinking.empty()
+        st.session_state.ask_history.append(
+            {"question": trimmed, "outcome": outcome}
+        )
+        # Update the conversational anchor: only carry forward when the
+        # query unambiguously narrowed to a single ticker. Multi-stock,
+        # sector, and index queries clear it so a follow-up doesn't
+        # silently pin to a stale stock.
+        if outcome.get("ok") and outcome.get("sql"):
+            ticker = extract_single_ticker(outcome["sql"])
+            st.session_state.ask_last_ticker = ticker
+
+        # Update the multi-turn transcript window (used for referential
+        # follow-ups beyond a single ticker). Only push successful turns
+        # — failed/timeout ones aren't useful context. Cap at MAX_TURNS.
+        if outcome.get("ok"):
+            from src.ai.memory import (
+                ConversationTurn, MAX_TURNS, extract_top_symbols,
+            )
+            r = outcome.get("result")
+            top_symbols: tuple[str, ...] = ()
+            if r is not None:
+                top_symbols = extract_top_symbols(
+                    list(r.columns), list(r.rows),
+                )
+            summary = (outcome.get("narrative") or "").strip()
+            turn = ConversationTurn(
+                question=trimmed,
+                top_symbols=top_symbols,
+                summary=summary,
+            )
+            st.session_state.ask_recent_turns.append(turn)
+            if len(st.session_state.ask_recent_turns) > MAX_TURNS:
+                st.session_state.ask_recent_turns = (
+                    st.session_state.ask_recent_turns[-MAX_TURNS:]
+                )
+        # Trigger scroll-to-newest on the next render so the user lands
+        # on the answer they just asked for, instead of the page scroll
+        # staying wherever it was when they hit Enter.
+        st.session_state["_ask_scroll_pending"] = True
+        st.rerun()
 
     # ---- One-shot scroll-to-newest after submission ----
     # Streamlit reruns from the top of the script and does not preserve or
