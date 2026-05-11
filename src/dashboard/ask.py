@@ -606,6 +606,16 @@ def render_ask_tab(
         # wherever the previous scroll position left them.
         st.session_state["_ask_scroll_pending"] = False
 
+    # ---- Scope disclaimer ----
+    # Welcome-banner pattern — sits at the top of the tab where users
+    # naturally look for context. Scrolls away as conversation grows
+    # so it never crowds the input. Same on desktop and mobile.
+    st.caption(
+        "📊 Explore **daily historical price + volume** data across the "
+        "S&P 500, NASDAQ-100, and Dow 30 — built for market analysis and "
+        "trend exploration, not forecasting future performance."
+    )
+
     # ---- Example chips — click to run immediately ----
     # chat_input doesn't accept programmatic prefill, so a chip click sets a
     # "pending example" sentinel that we run later in the function (after
@@ -643,6 +653,13 @@ def render_ask_tab(
           ) {
             display: none !important;
           }
+          /* Heading rendered inline with the marker DIV — bold, tight
+             margin so it doesn't add extra space above the chip stack. */
+          .ask-examples-mobile-heading {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin: 0 0 0.35rem 0;
+          }
           /* Tighten the mobile chip buttons — Streamlit's default
              padding leaves chips ~40px tall, which still adds up across
              four rows. Squeeze padding + zero the inner <p> margin so
@@ -650,6 +667,10 @@ def render_ask_tab(
           [data-testid="stVerticalBlock"]:has(
             > [data-testid="stElementContainer"]
               > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) button,
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-clear-history]
           ) button {
             padding: 0.2rem 0.6rem !important;
             min-height: 0 !important;
@@ -657,9 +678,23 @@ def render_ask_tab(
           [data-testid="stVerticalBlock"]:has(
             > [data-testid="stElementContainer"]
               > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) button p,
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-clear-history]
           ) button p {
             margin: 0 !important;
             line-height: 1.3 !important;
+          }
+          /* Tighten vertical spacing between sequential chip buttons in
+             the mobile stack. Streamlit's stElementContainer adds default
+             margin between siblings; reduce it inside the mobile chip
+             container so the four chips sit close together. */
+          [data-testid="stVerticalBlock"]:has(
+            > [data-testid="stElementContainer"]
+              > [data-testid="stMarkdown"] [data-ask-examples-mobile]
+          ) > [data-testid="stElementContainer"] {
+            margin-bottom: 0.25rem !important;
           }
         }
         </style>
@@ -681,19 +716,24 @@ def render_ask_tab(
                     st.session_state["_ask_pending_example"] = ex
                     st.rerun()
 
-    # Mobile chip set — four shorter examples, each fits a single line.
+    # Mobile chip set — four shorter examples in a single tight stack.
+    # No st.columns: collapsing two columns on mobile leaves a wider gap
+    # between rows than between sequential buttons in a single stack, so
+    # the user sees an uneven 1-2 / 2-3 / 3-4 spacing pattern. Combining
+    # the marker with the header in one st.markdown call also drops the
+    # empty stMarkdown wrapper that was adding visible padding above
+    # "Example questions:".
     with st.container():
         st.markdown(
-            '<div data-ask-examples-mobile="true"></div>',
+            '<div data-ask-examples-mobile="true"></div>'
+            '<div class="ask-examples-mobile-heading">'
+            'Example questions:</div>',
             unsafe_allow_html=True,
         )
-        st.markdown("**Example questions:**")
-        chip_cols_m = st.columns(2)
         for i, ex in enumerate(EXAMPLE_QUESTIONS_MOBILE):
-            with chip_cols_m[i % 2]:
-                if st.button(ex, key=f"ask_ex_m_{i}", use_container_width=True):
-                    st.session_state["_ask_pending_example"] = ex
-                    st.rerun()
+            if st.button(ex, key=f"ask_ex_m_{i}", use_container_width=True):
+                st.session_state["_ask_pending_example"] = ex
+                st.rerun()
 
     # ---- Input — st.chat_input gives us Enter-to-submit natively ----
     # Trade-off: chat_input is single-line (no Shift+Enter newline support).
@@ -717,6 +757,12 @@ def render_ask_tab(
         clear_cache_col = None
 
     with clear_history_col:
+        # Marker pairs with mobile-only CSS to shrink the button to chip
+        # size on small screens.
+        st.markdown(
+            '<div data-ask-clear-history="true"></div>',
+            unsafe_allow_html=True,
+        )
         if st.button("Clear history", use_container_width=True):
             st.session_state.ask_history = []
             st.session_state.ask_last_ticker = None
@@ -890,21 +936,6 @@ def render_ask_tab(
             height=0,
         )
 
-    # ---- Scope disclaimer ----
-    # The disclaimer is the last in-flow element. Without intervention it
-    # sticks to whatever immediately precedes it (the Clear-history button)
-    # and leaves a huge gap to the sticky chat_input bar at the bottom.
-    # The marker DIV below pairs with CSS in app.py to flex-push it to the
-    # bottom of the main content area so it sits just above the chat input.
-    st.markdown(
-        '<div data-ask-disclaimer-anchor="true"></div>',
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "📊 Explore **daily historical price + volume** data across the "
-        "S&P 500, NASDAQ-100, and Dow 30 — built for market analysis and "
-        "trend exploration, not forecasting future performance."
-    )
 
 
 def _render_history_entry(entry: dict, idx: int) -> None:
