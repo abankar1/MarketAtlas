@@ -8,9 +8,10 @@ caching, and known behavioral constraints.
 
 ## Project Identity
 
-**Type:** Streamlit dashboard + Python data pipeline  
-**Purpose:** Track and visualize price performance of S&P 500, NASDAQ-100, and Dow 30 constituents  
-**Stack:** Python 3.14, Streamlit, TimescaleDB (PostgreSQL), psycopg3, Plotly, Pandas, Marketstack API  
+**Type:** Streamlit dashboard + Python data pipeline + Anthropic LLM-backed Ask AI tab  
+**Purpose:** Track and visualize price performance of S&P 500, NASDAQ-100, and Dow 30 constituents; answer natural-language questions about historical price/volume.  
+**Stack:** Python 3.12 (cloud) / 3.14 (local), Streamlit, TimescaleDB (PostgreSQL on Tigerdata Cloud), psycopg3, Plotly, Pandas, Marketstack API, Anthropic API.  
+**Hosting:** Streamlit Community Cloud serves the dashboard from the `release` branch; GitHub Actions runs the daily-update job (cron in `.github/workflows/daily-update.yml`) from `main`.  
 **Working directory:** repo root (all `python -m` commands run from here)
 
 ---
@@ -21,20 +22,22 @@ caching, and known behavioral constraints.
 repo root/
 ├── src/
 │   ├── config/
-│   │   ├── configuration.json          # real credentials — git-ignored
+│   │   ├── configuration.json          # real credentials — git-ignored (local-dev fallback)
 │   │   ├── configuration.json.example  # committed placeholder
-│   │   └── settings.py                 # loads config, exposes Settings dataclass
+│   │   └── settings.py                 # 3-source loader: st.secrets → env vars → JSON file
 │   ├── db/
 │   │   ├── connection.py               # psycopg.connect() wrapper
-│   │   ├── readonly.py                 # sqlglot validator + readonly executor (Ask tab)
-│   │   └── repositories.py             # all SQL — upserts, fetches, OHLCV query, nl_queries log
+│   │   ├── readonly.py                 # sqlglot validator + readonly executor (Ask AI tab)
+│   │   └── repositories.py             # all SQL — upserts, fetches, OHLCV, nl_queries log, usage_events log
 │   ├── ai/
 │   │   ├── __init__.py
 │   │   ├── client.py                   # Anthropic Messages API wrapper (httpx)
-│   │   ├── query_templates.py          # pre-approved SQL templates + render() (Ask tab primary path)
-│   │   ├── intent_router.py            # Claude call: question → template name + params (Ask tab primary path)
-│   │   ├── nl_to_sql.py                # free-form NL → SQL fallback (Ask tab fallback path)
-│   │   └── cache.py                    # process-wide LRU+TTL cache for question → AI decision
+│   │   ├── query_templates.py          # pre-approved SQL templates + render() (Ask AI primary path)
+│   │   ├── intent_router.py            # Claude call: question → template name + params
+│   │   ├── nl_to_sql.py                # free-form NL → SQL fallback
+│   │   ├── narrate.py                  # 1-line conversational summary of a SQL result
+│   │   ├── memory.py                   # ConversationTurn + transcript helpers (multi-turn Ask AI memory)
+│   │   └── cache.py                    # process-wide LRU+TTL caches; PROMPT_VERSION invalidation
 │   ├── marketdata/
 │   │   └── client.py                   # Marketstack REST client
 │   ├── services/
@@ -44,15 +47,17 @@ repo root/
 │   ├── backfill/
 │   │   └── backfill_10y.py             # one-time historical backfill
 │   ├── dashboard/
-│   │   ├── app.py                      # Streamlit entry point — config, sidebar, nav
+│   │   ├── app.py                      # Streamlit entry point — config, sidebar, nav, usage_events logging
 │   │   ├── data.py                     # DB queries + session-level LRU caches
 │   │   ├── charts.py                   # Plotly figure builders (treemap + candlestick)
 │   │   ├── indicators.py               # pure-pandas technical indicator functions
-│   │   ├── heatmap.py                  # Heatmap tab renderer + CSV export
+│   │   ├── prefs.py                    # load/save ~/.marketatlas/prefs.json (sidebar defaults)
+│   │   ├── heatmap.py                  # Heatmap tab renderer + top-5 movers strip + CSV export
 │   │   ├── sector_synopsis.py          # Sector Synopsis tab renderer
 │   │   ├── stock_detail.py             # Stock Detail tab renderer + CSV export + badges
-│   │   ├── index_overlap.py            # Index Overlap tab renderer
-│   │   └── ask.py                      # Ask tab — route → template render OR fallback NL→SQL → dataframe
+│   │   ├── index_overlap.py            # Index Overlap tab renderer (HIDDEN — see _TABS)
+│   │   ├── news.py                     # News tab — Marketaux per-symbol headlines + sentiment
+│   │   └── ask.py                      # Ask AI tab — multi-turn router → template OR AI-SQL fallback
 │   ├── load_sectors.py                 # CLI: apply/check/export gics_sectors.json
 │   ├── sync_constituents.py            # CLI: standalone constituent sync
 │   └── main.py                         # CLI: daily orchestrator (sync + prices)
@@ -60,10 +65,20 @@ repo root/
 │   └── gics_sectors.json               # static {symbol: gics_sector} map (532 symbols)
 ├── docs/
 │   ├── user-guide.md                   # End-user dashboard guide
+│   ├── deployment.md                   # Streamlit Cloud + Tigerdata Cloud + GHA runbook
 │   └── timescaledb-cheatsheet.md       # TimescaleDB SQL reference
 ├── tests/
-│   ├── test_validate_sql.py            # SQL validator safety tests
-│   └── test_nl_to_sql_parsing.py       # response-parsing tests
+│   ├── test_ai_cache.py                # Cache key + TTL tests
+│   ├── test_intent_router.py           # Routing + parsing tests
+│   ├── test_nl_to_sql_parsing.py       # response-parsing tests
+│   ├── test_query_templates.py         # template render + ParamSpec tests
+│   └── test_validate_sql.py            # SQL validator safety tests
+├── .github/workflows/
+│   └── daily-update.yml                # GHA cron: market data refresh M/W/F at 09:00 UTC
+├── .streamlit/
+│   ├── config.toml                     # toolbarMode = "minimal"
+│   ├── secrets.toml.example            # committed template for Streamlit Cloud secrets UI
+│   └── secrets.toml                    # git-ignored — real secrets if testing locally
 ├── AGENTS.md                           # this file
 └── readme.md                           # human-facing setup guide
 # scripts/ is gitignored — operator-only files (DB setup SQL with passwords,
@@ -74,32 +89,43 @@ repo root/
 
 ## Configuration
 
-File: `src/config/configuration.json`
+`src/config/settings.py::load_settings()` reads from three sources, **in priority
+order** — the first source with a non-empty `db_url` wins:
 
-```json
+1. **`st.secrets`** — Streamlit Community Cloud (entered via the app's
+   *Settings → Secrets* UI; or `.streamlit/secrets.toml` for local Streamlit
+   testing). Keys may be flat or nested under `[market_atlas]`.
+2. **Environment variables** (uppercase form: `DB_URL`, `MARKETDATA_TOKEN`,
+   `ANTHROPIC_API_KEY`, …) — used by the GitHub Actions daily-update job.
+3. **`src/config/configuration.json`** — local-dev fallback (git-ignored).
+
+The same code therefore runs unchanged on Streamlit Cloud, in GHA, and locally.
+
+### Required + optional fields
+
+```jsonc
 {
-  "db_url": "postgresql://user:pass@host:port/dbname",
-  "db_url_readonly": "postgresql://marketatlas_reader:...@host:port/dbname",
-  "marketdata_token": "your_marketstack_key",
+  "db_url": "postgresql://user:pass@host:port/dbname",                  // required
+  "marketdata_token": "your_marketstack_key",                            // required
+  "db_url_readonly": "postgresql://atlas_reader:...@host:port/dbname",  // optional — Ask AI safety
   "days": 1000,
-  "api_sleep_seconds": 0.5,
-  "anthropic_api_key": "required for the Ask tab; also used for AI sector classification",
+  "api_sleep_seconds": 0.2,
+  "anthropic_api_key": "sk-ant-...",            // required for Ask AI + sector classifier
   "anthropic_model": "claude-haiku-4-5",
-  "marketaux_token": "optional — News tab headlines"
+  "marketaux_token": "..."                      // optional — News tab headlines
 }
 ```
 
-Loaded by `src/config/settings.py` → `load_settings()` returns a `Settings` object.  
-Field names matter: use `db_url` and `marketdata_token` — not `database_url` or `marketstack_access_key`.
+Field names matter: use `db_url` and `marketdata_token` — not `database_url` or
+`marketstack_access_key`.
 
-`db_url_readonly` is the connection string for the `marketatlas_reader` Postgres
-role used by the Ask tab to execute AI-generated SQL. See `scripts/setup_readonly_role.sql`.
+`db_url_readonly` is the connection string for the `atlas_reader` Postgres role
+used by the Ask AI tab to execute LLM-generated SQL. The role has SELECT-only
+privileges and a per-connection `statement_timeout=15s` set by `execute_safe()`.
+A template for creating this role lives in `docs/deployment.md` Phase 1.
 
-The dashboard searches four candidate paths for config (in order):
-1. `src/config/config.json`
-2. `src/config/configuration.json`
-3. `config.json`
-4. `configuration.json`
+The example template `.streamlit/secrets.toml.example` is committed; the real
+`secrets.toml` is git-ignored.
 
 ---
 
@@ -164,7 +190,7 @@ WHERE is_active IS NOT FALSE
 This pattern (not `= TRUE`) handles NULL values in legacy rows that predate the column.
 
 ### `public.nl_queries`
-Audit log for the Ask tab. One row per natural-language question, success or failure.
+Audit log for the Ask AI tab. One row per natural-language question, success or failure.
 
 | Column                  | Type        | Notes                                       |
 |-------------------------|-------------|---------------------------------------------|
@@ -172,7 +198,7 @@ Audit log for the Ask tab. One row per natural-language question, success or fai
 | ts                      | TIMESTAMPTZ | DEFAULT NOW()                               |
 | question                | TEXT        | Raw user input                              |
 | generated_sql           | TEXT        | Rendered template SQL or AI-generated SQL; NULL if generation failed |
-| status                  | TEXT        | success / unsafe_sql / timeout / cannot_answer / generation_error / execution_error / config_error |
+| status                  | TEXT        | success / unsafe_sql / timeout / cannot_answer / generation_error / execution_error / ai_error |
 | error_message           | TEXT        |                                             |
 | row_count               | INTEGER     |                                             |
 | duration_ms             | INTEGER     |                                             |
@@ -183,9 +209,29 @@ Audit log for the Ask tab. One row per natural-language question, success or fai
 | path                    | TEXT        | `'template'` or `'ai_sql'` — which path served the question |
 | template_name           | TEXT        | Matched template (e.g. `'sector_count_by_index'`); NULL on AI-SQL path |
 | template_params         | JSONB       | Bound parameter dict for replay; NULL on AI-SQL path |
+| from_cache              | BOOLEAN     | TRUE if served from the in-process LLM cache (no API call) |
+| raw_response            | TEXT        | Raw model output (router JSON or `<sql>` block) for replay/debugging |
 
-Created by `scripts/create_nl_queries_table.sql` then extended by `scripts/add_path_to_nl_queries.sql`.
-Indexed on `ts DESC`, `status`, `path`, and `template_name`.
+Created by `scripts/create_nl_queries_table.sql` then extended by follow-up
+migration scripts. Indexed on `ts DESC`, `status`, `path`, `template_name`, and
+`from_cache`.
+
+### `public.usage_events`
+Lightweight lifecycle log: one row per session load, one row per tab click.
+Auto-created on first insert by `_ensure_usage_events_table()` in `repositories.py`.
+
+| Column     | Type        | Notes                                        |
+|------------|-------------|----------------------------------------------|
+| id         | BIGSERIAL PK |                                             |
+| ts         | TIMESTAMPTZ | DEFAULT NOW()                                |
+| session_id | TEXT        | UUID generated once per browser session in `app.py` |
+| event_type | TEXT        | `'session_load'` or `'tab_change'`           |
+| from_tab   | TEXT        | `NULL` for `session_load`; previous tab for `tab_change` |
+| to_tab     | TEXT        | Initial tab (`session_load`) or destination (`tab_change`) |
+
+Indexed on `ts DESC` and `session_id`. Writes are fire-and-forget via daemon
+threads so a tab click is never blocked on cloud-DB latency. See `log_usage_event`
+in `repositories.py`.
 
 ---
 
@@ -232,29 +278,35 @@ SQL pattern:
 
 ## Dashboard Architecture
 
-The dashboard is split into one entry-point module and six supporting modules:
+The dashboard is split into one entry-point module and several supporting modules:
 
 | Module | Responsibility |
 |--------|---------------|
-| `app.py` | Page config, global CSS, sidebar controls, top-level data fetch, session-state tab navigation (4 tabs) |
+| `app.py` | Page config, global CSS, sidebar controls, top-level data fetch, session-state tab navigation, lifecycle logging (`session_load` / `tab_change` → `usage_events`) |
 | `data.py` | `connect`, `build_universe_sql`, `fetch_treemap_data`, `fetch_available_date_bounds`, `fetch_index_overlap`, `get_treemap_data_cached`, `get_ohlcv_cached`, LRU cache helpers |
-| `charts.py` | `build_fig` (treemap), `build_detail_fig` (multi-panel candlestick) |
+| `charts.py` | `build_fig` (treemap), `build_detail_fig` (multi-panel candlestick), `build_compare_fig` (multi-symbol rebased) |
 | `indicators.py` | Pure-pandas indicator computations — no Streamlit or DB dependencies |
-| `heatmap.py` | `render_heatmap_tab` — KPI row, treemap/table toggle, CSV export button |
+| `prefs.py` | `load_prefs` / `save_prefs` for `~/.marketatlas/prefs.json` (sidebar defaults survive browser restarts) |
+| `heatmap.py` | `render_heatmap_tab` — KPI row, top-5 movers strip (▲/▼), treemap/table toggle, CSV export |
 | `sector_synopsis.py` | `render_sector_synopsis_tab` (entry point) + `render_sector_synopsis` (`@st.fragment`) |
-| `stock_detail.py` | `render_stock_detail` (`@st.fragment`) — symbol picker, index membership badges, candlestick chart, OHLCV CSV export |
-| `index_overlap.py` | `render_index_overlap_tab` — headline counts, cross-membership bar chart, per-bucket symbol tables |
-| `ask.py` | `render_ask_tab` — natural-language input → Claude generates SQL → `validate_sql` → `execute_safe` on the readonly role → render dataframe. Falls back to a warning if `anthropic_api_key` or `db_url_readonly` is unconfigured. |
+| `stock_detail.py` | `render_stock_detail` (`@st.fragment`) — symbol picker, index membership badges, candlestick chart, OHLCV CSV export, Compare-mode multi-symbol chart |
+| `index_overlap.py` | `render_index_overlap_tab` — present in code but **hidden** from the tab strip (still renderable if the tab is re-added to `_TABS`) |
+| `news.py` | `render_news_tab` — Marketaux per-symbol headlines + sentiment chips |
+| `ask.py` | `render_ask_tab` — multi-turn router → template OR free-form NL→SQL fallback → `validate_sql` → `execute_safe` on the readonly role → dataframe + 1-line narrative summary |
 
 ### Tab Navigation
 
-Tabs are implemented as three `st.button` widgets backed by `session_state["active_tab"]`.
+Tabs are implemented as `st.button` widgets backed by `session_state["active_tab"]`.
 This replaces `st.tabs`, which resets to tab 0 on every full page rerun in Streamlit 1.53.
 
 ```python
-_TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap", "Ask"]
+# src/dashboard/app.py
+# Index Overlap is intentionally omitted from the visible strip; its render
+# branch and import remain in place so re-enabling is a one-line change.
+_TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
 # Buttons use type="primary"/"secondary" based on active_tab.
-# _on_tab_click callback sets session_state["active_tab"] before the rerun.
+# _on_tab_click callback sets session_state["active_tab"] AND fires a
+# fire-and-forget log_usage_event(..., 'tab_change', ...) on a daemon thread.
 ```
 
 ---
@@ -265,11 +317,11 @@ _TABS = ["Heatmap", "Sector Synopsis", "Stock Detail", "News", "Index Overlap", 
 
 | Function | Signature | Purpose |
 |----------|-----------|---------|
-| `load_config` | `() -> dict` | Searches 4 candidate paths for config JSON |
+| `load_config` | `() -> dict` | Delegates to `src.config.settings.load_settings()` (st.secrets / env vars / JSON file). Returns `{}` on missing config so caller can show a friendly error. |
 | `_preset_dates` | `(key: str) -> (date, date)` | Compute (date_from, date_to) for a preset key |
 | `_on_preset_click` | `(label, min_day, end_max_day) -> None` | `on_click` callback for preset buttons; updates session_state before rerun |
-| `_on_tab_click` | `(tab_name: str) -> None` | `on_click` callback for tab nav buttons |
-| `main` | `() -> None` | Streamlit entry point |
+| `_on_tab_click` | `(tab_name: str, db_url: str = "") -> None` | `on_click` callback for tab nav buttons; sets active_tab AND fires `log_usage_event(..., 'tab_change', ...)` (fire-and-forget on a daemon thread) |
+| `main` | `() -> None` | Streamlit entry point. Generates `_session_id` (UUID) once per session. Logs `session_load` (with `to_tab='Heatmap'`) once per session, gated by `_app_load_persisted`. |
 
 ### `src/dashboard/data.py`
 
@@ -392,6 +444,9 @@ Static file path: `data/gics_sectors.json` — `{symbol: gics_sector}` flat mapp
 | `fetch_nasdaq100_symbols(conn)` | `WHERE is_active IS NOT FALSE` |
 | `fetch_dow30_symbols(conn)` | `WHERE is_active IS NOT FALSE` |
 | `fetch_ohlcv(conn, symbol, date_from, date_to)` | Returns DataFrame: date, open, high, low, close, volume |
+| `log_nl_query(db_url, *, question, generated_sql=None, status, ...)` | Synchronous best-effort INSERT into `nl_queries`. Uses primary `db_url` (the readonly role has no INSERT). Connect timeout 3s. Swallows all exceptions (audit logging must never break the UI). |
+| `log_usage_event(db_url, *, session_id, event_type, from_tab=None, to_tab=None)` | **Fire-and-forget** — spawns a daemon thread to do the DB write so the UI returns in microseconds. The actual blocking write lives in `_log_usage_event_sync`. |
+| `_ensure_usage_events_table(conn)` | Idempotent `CREATE TABLE IF NOT EXISTS usage_events …` + indices. Module-level flag `_USAGE_EVENTS_ENSURED` skips the no-op DDL after first success per Python process. |
 
 ### `src/marketdata/client.py`
 
@@ -447,7 +502,22 @@ Two separate `OrderedDict` caches in `src/dashboard/data.py`, evicted by LRU:
 | `ohlcv_cache` | `(symbol, date_from_iso, date_to_iso)` | 20 |
 
 Stats (`treemap_cache_hits`, `treemap_cache_misses`) are tracked in session_state.  
-Both caches are cleared together by the "Clear cached results" sidebar button.
+Both caches are cleared together by the "Clear cached results" sidebar button (developer-only).
+
+### LLM decision caches (process-wide, `src/ai/cache.py`)
+Three module-level `TTLCache` instances (12h TTL, 200 entries each) — survive Streamlit reruns within the same worker process; lost on process restart:
+
+| Cache | Stores | Purpose |
+|-------|--------|---------|
+| `_ROUTE_CACHE` | `RouteCacheEntry(kind, name, params)` | Skip a router-Claude call on repeat questions |
+| `_AI_SQL_CACHE` | Generated SQL string | Skip an AI-SQL-generator call on repeat questions |
+| `_NARRATE_CACHE` (in `narrate.py`) | One-line narrative string | Skip a narrate-Claude call when the same question has the same result rows |
+
+All keys fold `PROMPT_VERSION` + `model_id` + `last_ticker` + `transcript_hash` + `normalised_question` so:
+- Different conversations don't collide on identical follow-ups (e.g. "their names" after different sets of symbols).
+- Bumping `PROMPT_VERSION` invalidates every stale entry on the next deploy. The history is documented inline in `cache.py`. Bumping is essentially the only way to flush after a prompt or template edit, and it costs one character.
+
+The dashboard's developer-only "Clear AI cache" sidebar button calls `clear_all()` to wipe all three.
 
 ---
 
@@ -493,7 +563,7 @@ Fragment parameters are passed by the full-page render and are frozen for the li
 
 11. **CSV export is rate-limited to 3 calendar months.** Both the Heatmap and Stock Detail download buttons are disabled when `date_to > date_from + 3 calendar months`. The check is calendar-month-aware (not a flat 90-day count): `_exceeds_three_months(d_from, d_to)` in `heatmap.py` and `stock_detail.py`.
 
-12. **AI-generated SQL runs ONLY on the readonly role.** `db_url_readonly` is a separate Postgres role (`marketatlas_reader`) with `SELECT`-only privileges, `statement_timeout=5s` set at the role level, and an explicit `SET TRANSACTION READ ONLY` per query. Audit log writes use `db_url` (the primary role) because the readonly role has no INSERT privilege.
+12. **AI-generated SQL runs ONLY on the readonly role.** `db_url_readonly` is a separate Postgres role (`atlas_reader`) with `SELECT`-only privileges. `execute_safe()` sets `statement_timeout=15000ms` per-connection and `SET TRANSACTION READ ONLY` per query. Audit log writes use `db_url` (the primary role) because the readonly role has no INSERT privilege.
 
 13. **SQL validation uses sqlglot, not regex.** `validate_sql` parses the AST and walks every node, rejecting any non-SELECT/WITH/UNION/INTERSECT/EXCEPT statement type *anywhere in the tree* (catches DML embedded in CTEs, e.g., `WITH d AS (DELETE FROM x RETURNING *) SELECT ...`), plus a deny-list of forbidden function names (`pg_read_file`, `pg_sleep`, `dblink`, `pg_terminate_backend`, …). Multi-statement input (semicolon-separated) is rejected before parsing.
 
@@ -503,7 +573,15 @@ Fragment parameters are passed by the full-page render and are frozen for the li
 
 16. **A template's parameter surface is its safety contract.** Adding a new param: declare a `ParamSpec` with `choices` (allowlist) for enums, `min`/`max` for numerics, or `pattern` for strings. The `render()` helper rejects anything outside the spec before any SQL is sent to the DB.
 
-17. **The Ask tab caches LLM decisions, never DB results.** `src/ai/cache.py` holds two LRU+TTL caches keyed on `(model_id, normalised_question)` — one for router decisions (template name + params, or `miss`), one for AI-SQL fallback strings. Templates re-execute against current DB state every time, so cached routing for "last 30 days" gives a different answer tomorrow (CURRENT_DATE in the SQL handles it). Caching is an optimisation, not a source of truth — clearable via the "Clear AI cache" button or `clear_all()`. Errors are not cached.
+17. **The Ask AI tab caches LLM decisions, never DB results.** Three LRU+TTL caches in `src/ai/cache.py` (route, ai_sql, narrate). Keys fold `PROMPT_VERSION` so a one-character bump invalidates every stale entry on the next deploy — far more robust than manual cache clears. Templates re-execute against current DB state every time. Errors are not cached.
+
+18. **Filter `daily_bars.ts` directly — never wrap it in a function inside WHERE.** TimescaleDB chunk pruning only kicks in when the partition column appears unwrapped in the WHERE clause. `WHERE (ts AT TIME ZONE 'UTC')::date >= …` disables pruning and turns a 90ms query into a 5+ second full-hypertable scan. Use `WHERE ts >= NOW() - INTERVAL '30 days'` instead. The schema docstring in `nl_to_sql.py` calls this out for the LLM as well.
+
+19. **Hide Streamlit's "Ask Google" / "Ask ChatGPT" helper anchors.** Streamlit 1.31+ injects them next to `st.error` / `st.exception` widgets. They surface internal SQL/error text to third-party AI tools. Global CSS in `app.py` hides any anchor with `href*="google.com/search"`, `chatgpt.com/?q="`, or `chat.openai.com/?q="`. The native "Copy" button is preserved.
+
+20. **`log_usage_event` is fire-and-forget.** The DB write happens on a daemon thread so the on_click handler returns in microseconds. Daemon threads die with the process, so an event in flight when the worker exits is lost — acceptable for low-volume lifecycle events. `log_nl_query` stays synchronous because the LLM call dominates that path's latency anyway.
+
+21. **`PROMPT_VERSION` history is the changelog for prompt-affecting edits.** Every time prompts in `nl_to_sql.py`, `narrate.py`, or templates in `query_templates.py` change in a way that affects model output, bump `PROMPT_VERSION` in `cache.py` and add a one-line history entry. This invalidates stale cached entries deterministically — no operator action needed.
 
 ---
 
@@ -512,23 +590,32 @@ Fragment parameters are passed by the full-page render and are frozen for the li
 Claude integration is organized under `src/ai/`:
 
 - `client.py` — `AIClient` wrapping the Anthropic Messages API via `httpx`. Supports prompt caching via `cacheable_system=True` (marks the system block with `cache_control={"type": "ephemeral"}`). Returns `AIResponse` with input/output/cache token counts.
-- `query_templates.py` — registry of **pre-approved parameterized SQL templates** (the Ask tab primary path). Each `QueryTemplate` declares a `name`, `description`, `sql` (with psycopg `%(name)s` placeholders for strings/dates and `{name}` placeholders for ints/floats), a typed `ParamSpec` per param (allowlist for sectors / indices, min/max for numerics, regex for symbols), and 1-3 NL examples. `render(template_name, params)` validates every param then returns `(sql, bound_params)`. Module import runs every template through sqlglot to catch authoring bugs at startup.
-- `intent_router.py` — single Claude call that maps a question to either a template name + extracted params, or `null` (no match). The model **never sees the SQL bodies of templates** — only their names, descriptions, and NL examples. Output is JSON wrapped in `<json>...</json>` tags. `parse_routing_response(...)` validates structure and rejects unknown template names.
-- `nl_to_sql.py` — free-form NL→SQL **fallback** generator (used only when the router returns `null`). Holds the system prompt with schema DDL + 11-sector GICS enum + 8 few-shot examples including a CANNOT_ANSWER refusal.
-- `cache.py` — process-wide LRU+TTL cache (12h TTL, 200 entries each) for two surfaces: (a) the router's decision (`{template, params}` or `miss`) and (b) the AI-SQL generator's output SQL. Keys are `(model_id, normalised_question)`. Repeat questions skip the API call entirely; cached entries log `input_tokens=0` so audit reports show free queries clearly. The cache holds *only* the LLM's decision — actual SQL still runs against current DB state every time, so daily price/volume changes are picked up. Templates use `CURRENT_DATE` in their SQL, so a cached "30 days" routing today gives a different result tomorrow.
+- `query_templates.py` — registry of **pre-approved parameterized SQL templates** (the Ask AI tab primary path). Each `QueryTemplate` declares a `name`, `description`, `sql` (with psycopg `%(name)s` placeholders for strings/dates and `{name}` placeholders for ints/floats), a typed `ParamSpec` per param (allowlist for sectors / indices, min/max for numerics, regex for symbols), and 1-3 NL examples. `render(template_name, params)` validates every param then returns `(sql, bound_params)`. Module import runs every template through sqlglot to catch authoring bugs at startup.
+- `intent_router.py` — single Claude call that maps a question to either a template name + extracted params, or `null` (no match). The model **never sees the SQL bodies of templates** — only their names, descriptions, and NL examples. Output is JSON wrapped in `<json>...</json>` tags. Accepts `recent_turns` for multi-turn context.
+- `nl_to_sql.py` — free-form NL→SQL **fallback** generator (used only when the router returns `null`). Holds the system prompt with schema DDL + 11-sector GICS enum + few-shot examples including a CANNOT_ANSWER refusal (sentence-cased, sentence-terminated).
+- `narrate.py` — `summarize(client, question, columns, rows, last_ticker=None, recent_turns=None)`: a short Haiku call that turns SQL result rows into a 1-2 sentence answer in stock context. Cached on `(question, columns, rows-hash, last_ticker, transcript_hash)`. The system prompt also instructs the narrator to optionally append a "See the **Stock Detail** tab for the full chart." pointer when another tab would show meaningfully more.
+- `memory.py` — `ConversationTurn` dataclass + `format_transcript()` and `transcript_hash()` helpers. The Ask AI tab keeps a sliding window of `MAX_TURNS=3` recent turns (each = `{question, top_symbols, summary}`) in `st.session_state.ask_recent_turns`; the transcript is injected into router / nl_to_sql / narrate prompts so referential follow-ups like "their names" resolve when `last_ticker` alone isn't enough.
+- `cache.py` — process-wide LRU+TTL cache (12h TTL, 200 entries each) for two surfaces: (a) the router's decision (`{template, params}` or `miss`) and (b) the AI-SQL generator's output SQL. Keys fold `PROMPT_VERSION` + `model_id` + `last_ticker` + `transcript_hash` + `normalised_question`. Repeat questions skip the API call entirely; cached entries log `input_tokens=0` so audit reports show free queries clearly. The cache holds *only* the LLM's decision — actual SQL still runs against current DB state every time. **Bumping `PROMPT_VERSION` invalidates every stale entry on the next deploy without a manual cache clear** — a one-character change is enough.
 
-The Ask tab orchestrator (`src/dashboard/ask.py::_run_query`):
+The Ask AI tab orchestrator (`src/dashboard/ask.py::_run_query`):
 
-1. **Route** — `intent_router.route(client, question)` → `RoutedTemplate` or `RoutingMiss`.
+1. **Route** — `intent_router.route(client, question, last_ticker=..., recent_turns=...)` → `RoutedTemplate` or `RoutingMiss`. Cache lookup happens first via `lookup_route`.
 2. **Template path** (`RoutedTemplate`):
    a. `query_templates.render(name, params)` validates params, returns `(sql, bound_params)`.
    b. `execute_safe(db_url_readonly, sql, bound_params=...)` runs on the readonly role.
    c. `log_nl_query(..., path='template', template_name=..., template_params=...)`.
+   d. `_attach_narrative(...)` calls `narrate.summarize(...)` for the 1-line summary.
 3. **AI-SQL fallback** (`RoutingMiss`):
-   a. `generate_sql(client, question)` (raises `CannotAnswerError` / `GenerationError`).
+   a. `lookup_ai_sql` then `generate_sql(client, question, last_ticker=..., recent_turns=...)` (raises `CannotAnswerError` / `GenerationError`).
    b. `validate_sql(sql)` (sqlglot — raises `UnsafeSQLError`).
    c. `execute_safe(db_url_readonly, sql)`.
    d. `log_nl_query(..., path='ai_sql')`. Token counts include the router's tokens plus the generator's.
+   e. `_attach_narrative(...)`.
+
+Multi-turn memory bookkeeping in `render_ask_tab`:
+- `st.session_state.ask_last_ticker` — single-ticker anchor for follow-ups like "what about volume?"
+- `st.session_state.ask_recent_turns` — sliding window of `ConversationTurn` (capped at `MAX_TURNS=3`)
+- Both reset by the **Clear history** button.
 
 Adding a new template:
 - Append a `QueryTemplate(...)` to `TEMPLATES` in `query_templates.py`.
@@ -537,7 +624,7 @@ Adding a new template:
 - Provide 1-3 `nl_examples` — those are the router's primary signal.
 - The `_check_template` self-check at module import will refuse to start if any `{placeholder}` or `%(placeholder)s` is undeclared.
 
-Future AI features (daily briefs, sector narratives, "explain this move") will reuse `AIClient` and add their own modules under `src/ai/`.
+Future AI features will reuse `AIClient` and add their own modules under `src/ai/`.
 
 ---
 
