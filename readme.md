@@ -9,7 +9,7 @@ Market Atlas is a data-driven platform that:
 - Ingests daily OHLCV stock data for S&P 500, NASDAQ-100, and Dow 30
 - Stores it in PostgreSQL with the TimescaleDB extension (time-series optimized)
 - Provides an interactive Streamlit dashboard — treemap heatmap, sector breadth, per-stock candlestick charts with technical indicators, per-symbol news with sentiment, and index overlap analysis
-- Auto-syncs index constituents monthly from [yfiua/index-constituents](https://github.com/yfiua/index-constituents)
+- Auto-syncs index constituents from Wikipedia (S&P 500, NASDAQ-100, Dow 30 pages)
 - Supports 10-year historical backfill and incremental daily updates
 
 ---
@@ -172,8 +172,8 @@ python -m src.sync_constituents
 ```
 
 This fetches the latest S&P 500, NASDAQ-100, and Dow 30 membership from
-[yfiua/index-constituents](https://github.com/yfiua/index-constituents) (no API key required),
-diffs against the database, and handles additions/removals automatically.
+the constituent tables on Wikipedia (no API key required), diffs against
+the database, and handles additions/removals automatically.
 
 Options:
 
@@ -250,8 +250,12 @@ UI preferences (palette, index, default date preset, indicator selection) are pe
 ## Constituent Sync
 
 Index membership is kept current via the sync service. It pulls data from
-[yfiua/index-constituents](https://github.com/yfiua/index-constituents)
-(updated monthly on the 1st, no API key required).
+the constituent tables on Wikipedia (community-maintained, typically same-day
+for additions/deletions, no API key required):
+
+- S&P 500: <https://en.wikipedia.org/wiki/List_of_S%26P_500_companies>
+- NASDAQ-100: <https://en.wikipedia.org/wiki/Nasdaq-100>
+- Dow 30: <https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average>
 
 - **Additions** — new symbols are inserted into the constituent table and a minimal `assets` row is created
 - **Removals** — dropped symbols are soft-deleted (`is_active = FALSE`, `removed_date` recorded) so historical data is preserved
@@ -331,7 +335,7 @@ Market Atlas/
 │   │   ├── client.py                   # Marketstack API client (OHLCV)
 │   │   └── news_client.py              # Marketaux API client (news + sentiment)
 │   ├── services/
-│   │   ├── constituent_sync.py         # yfiua index membership sync
+│   │   ├── constituent_sync.py         # Wikipedia index membership sync
 │   │   ├── daily_bar_importer.py       # incremental OHLCV importer
 │   │   └── sector_classifier.py        # GICS sector classification (Claude API)
 │   ├── dashboard/
