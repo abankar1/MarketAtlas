@@ -80,8 +80,13 @@ def classify_via_api(
         f'{{"AAPL": "Information Technology", "JNJ": "Health Care"}}'
     )
 
+    # Sonnet 4.6 is the current Sonnet-tier model. The previous pin
+    # (claude-sonnet-4-20250514) was retired and started 404'ing in
+    # GitHub Actions. Sonnet (vs Haiku) preserves the original
+    # accuracy bias for sector classification — the prompt is short
+    # and runs only on additions, so cost is negligible.
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
