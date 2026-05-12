@@ -130,6 +130,50 @@ def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None
     st.session_state["date_to"]   = max(min_day, min(d_to,   end_max_day))
 
 
+def _get_session_device() -> tuple[str | None, bool | None]:
+    """
+    Read the browser User-Agent once per session from st.context.headers
+    (Streamlit 1.33+) and derive a coarse mobile/desktop flag.
+
+    Cached in session_state so we don't repeat the header lookup on every
+    rerun. Returns (user_agent, is_mobile) — either may be None if headers
+    aren't exposed (older Streamlit, certain proxy configs).
+    """
+    if "_device_classified" in st.session_state:
+        return (
+            st.session_state.get("_device_user_agent"),
+            st.session_state.get("_device_is_mobile"),
+        )
+
+    user_agent: str | None = None
+    is_mobile: bool | None = None
+    try:
+        # st.context.headers behaves dict-like but is case-insensitive in
+        # recent Streamlit versions. Guard anyway in case the context API
+        # is absent or empty.
+        headers = getattr(st.context, "headers", None)
+        if headers is not None:
+            user_agent = headers.get("User-Agent") or headers.get("user-agent")
+    except Exception:
+        user_agent = None
+
+    if user_agent:
+        # Coarse classification — the raw UA is also stored so any
+        # downstream analyst can re-classify with finer rules later.
+        # iPad is intentionally NOT counted as mobile: Apple's UA reports
+        # it as desktop and viewport-wise it behaves more like one.
+        ua_lower = user_agent.lower()
+        is_mobile = any(
+            marker in ua_lower
+            for marker in ("mobile", "android", "iphone", "ipod")
+        )
+
+    st.session_state["_device_user_agent"] = user_agent
+    st.session_state["_device_is_mobile"] = is_mobile
+    st.session_state["_device_classified"] = True
+    return user_agent, is_mobile
+
+
 def _on_tab_click(tab_name: str, db_url: str = "") -> None:
     """on_click callback for custom tab navigation buttons."""
     prev = st.session_state.get("active_tab")
@@ -146,12 +190,15 @@ def _on_tab_click(tab_name: str, db_url: str = "") -> None:
         flush=True,
     )
     if db_url:
+        ua, is_mobile = _get_session_device()
         log_usage_event(
             db_url,
             session_id=st.session_state.get("_session_id", "unknown"),
             event_type="tab_change",
             from_tab=prev,
             to_tab=tab_name,
+            user_agent=ua,
+            is_mobile=is_mobile,
         )
 
 
@@ -629,11 +676,14 @@ def main() -> None:
     # see "default-tab views" even when the user never clicks. Hardcoded to
     # "Heatmap" — the default in the _TABS init below.
     if not st.session_state.get("_app_load_persisted"):
+        ua, is_mobile = _get_session_device()
         log_usage_event(
             db_url,
             session_id=st.session_state.get("_session_id", "unknown"),
             event_type="session_load",
             to_tab="Heatmap",
+            user_agent=ua,
+            is_mobile=is_mobile,
         )
         st.session_state["_app_load_persisted"] = True
 
