@@ -1,9 +1,9 @@
 """
 Daily update orchestrator.
 
-Optionally syncs index constituents from yfiua GitHub Pages, then
-fetches the latest daily bars for all symbols across S&P 500,
-NASDAQ-100, and Dow 30.
+Optionally syncs index constituents from Wikipedia, then fetches
+the latest daily bars for all symbols across S&P 500, NASDAQ-100,
+and Dow 30.
 
 Usage:
     python -m src.main                  # sync constituents + fetch prices
@@ -31,7 +31,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-sync",
         action="store_true",
-        help="Skip constituent sync from yfiua GitHub Pages",
+        help="Skip constituent sync from Wikipedia",
     )
     args = parser.parse_args()
 
