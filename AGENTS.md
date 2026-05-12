@@ -41,7 +41,7 @@ repo root/
 │   ├── marketdata/
 │   │   └── client.py                   # Marketstack REST client
 │   ├── services/
-│   │   ├── constituent_sync.py         # live sync against yfiua GitHub Pages
+│   │   ├── constituent_sync.py         # live sync from Wikipedia constituent tables
 │   │   ├── daily_bar_importer.py       # incremental OHLCV importer
 │   │   └── sector_classifier.py        # GICS sector logic + Claude API fallback
 │   ├── backfill/
@@ -246,7 +246,7 @@ in `repositories.py`.
 6. Prints per-symbol counts and a summary of data freshness
 
 ### Constituent Sync (`src/services/constituent_sync.py`)
-1. `fetch_remote(index_name)` → HTTP GET to yfiua GitHub Pages JSON
+1. `fetch_remote(index_name)` → HTTP GET Wikipedia page, parse table with `id="constituents"` via `pandas.read_html`, normalize symbols (BRK.B → BRK-B)
 2. `fetch_current_active(index_name)` → DB query for active symbols
 3. Diff: `additions = remote - active`, `removals = active - remote`
 4. `upsert_additions()` → INSERT ON CONFLICT for constituent table + minimal assets row
@@ -419,10 +419,15 @@ Seven membership buckets (all mutual-exclusion combinations of S&P 500 / NASDAQ-
 | `dry_run_index(index_name)` | Read-only diff; returns `SyncResult` |
 | `dry_run_all()` | Read-only diff for all three; returns `list[SyncResult]` |
 
-yfiua URLs:
-- sp500: `https://yfiua.github.io/index-constituents/constituents-sp500.json`
-- nasdaq100: `https://yfiua.github.io/index-constituents/constituents-nasdaq100.json`
-- dow30: `https://yfiua.github.io/index-constituents/constituents-dowjones.json`
+Wikipedia URLs (constituent table is identified by `id="constituents"` on each page):
+- sp500: `https://en.wikipedia.org/wiki/List_of_S%26P_500_companies`
+- nasdaq100: `https://en.wikipedia.org/wiki/Nasdaq-100`
+- dow30: `https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average`
+
+Symbol/name column names vary across pages. Resolved by case-insensitive
+alias match: symbol from {`Symbol`, `Ticker`}, name from {`Security`,
+`Company`, `Name`}. Class-share dot symbols (BRK.B, BF.B) are normalized
+to hyphen form (BRK-B, BF-B) to match Marketstack/Yahoo Finance.
 
 ### `src/services/sector_classifier.py`
 

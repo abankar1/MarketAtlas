@@ -1,8 +1,9 @@
 """
-Sync index constituents from yfiua GitHub Pages.
+Sync index constituents from Wikipedia.
 
-Pulls the latest S&P 500, NASDAQ-100, and Dow 30 membership lists,
-diffs against the database, and handles additions/removals.
+Pulls the latest S&P 500, NASDAQ-100, and Dow 30 membership lists from
+the constituent tables on each index's Wikipedia page, diffs against
+the database, and handles additions/removals via soft deletes.
 
 Usage:
     python -m src.sync_constituents                # full sync + sector classification
@@ -21,7 +22,7 @@ from src.services.sector_classifier import ensure_sectors
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Sync index constituents from yfiua GitHub Pages",
+        description="Sync index constituents from Wikipedia",
     )
     parser.add_argument(
         "--dry-run",
