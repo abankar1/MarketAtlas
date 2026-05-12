@@ -168,6 +168,7 @@ def _run_query(
     *,
     last_ticker: str | None = None,
     recent_turns: tuple | list | None = None,
+    session_id: str | None = None,
 ) -> dict:
     """
     Route → render → execute, with the AI-SQL flow as the fallback path.
@@ -225,6 +226,8 @@ def _run_query(
             log_nl_query(
                 db_url, question=question, status="generation_error",
                 error_message=f"router: {e}", path="template",
+            
+                session_id=session_id,
             )
             return {"ok": False, "kind": "generation", "msg": f"router: {e}"}
         except AIClientError as e:
@@ -235,6 +238,8 @@ def _run_query(
             log_nl_query(
                 db_url, question=question, status="generation_error",
                 error_message=f"router: {e}", path="template",
+            
+                session_id=session_id,
             )
             return {"ok": False, "kind": "ai_error", "msg": f"router: {e}"}
 
@@ -272,6 +277,8 @@ def _run_query(
                 template_params=routing.params,
                 from_cache=routed_from_cache,
                 raw_response=routing.raw_response,
+            
+                session_id=session_id,
             )
             _log_summary(
                 question, model=model_id, status="success", path="template",
@@ -318,6 +325,8 @@ def _run_query(
                 cache_creation_tokens=routing.cache_creation_tokens,
                 from_cache=routed_from_cache,
                 raw_response=routing.raw_response,
+            
+                session_id=session_id,
             )
             return {
                 "ok": False,
@@ -336,6 +345,8 @@ def _run_query(
                 template_params=routing.params,
                 from_cache=routed_from_cache,
                 raw_response=routing.raw_response,
+            
+                session_id=session_id,
             )
             return {"ok": False, "kind": "timeout", "msg": str(e), "sql": sql}
         except ExecutionError as e:
@@ -351,6 +362,8 @@ def _run_query(
                 template_params=routing.params,
                 from_cache=routed_from_cache,
                 raw_response=routing.raw_response,
+            
+                session_id=session_id,
             )
             return {"ok": False, "kind": "execution", "msg": str(e), "sql": sql}
 
@@ -417,7 +430,9 @@ def _run_query(
             path="ai_sql",
             from_cache=ai_sql_fully_cached,
             raw_response=generated.raw_response,
-        )
+        
+                session_id=session_id,
+            )
         _log_summary(
             question, model=model_id, status="success", path="ai_sql",
             cached=ai_sql_fully_cached,
@@ -461,7 +476,9 @@ def _run_query(
             path="ai_sql",
             from_cache=sql_from_cache,
             raw_response=generated.raw_response if generated else None,
-        )
+        
+                session_id=session_id,
+            )
         return {"ok": False, "kind": "cannot_answer", "msg": e.detail or str(e)}
 
     except UnsafeSQLError as e:
@@ -482,7 +499,9 @@ def _run_query(
             path="ai_sql",
             from_cache=sql_from_cache,
             raw_response=generated.raw_response if generated else None,
-        )
+        
+                session_id=session_id,
+            )
         return {
             "ok": False,
             "kind": "unsafe",
@@ -506,7 +525,9 @@ def _run_query(
             path="ai_sql",
             from_cache=sql_from_cache,
             raw_response=generated.raw_response if generated else None,
-        )
+        
+                session_id=session_id,
+            )
         return {
             "ok": False,
             "kind": "timeout",
@@ -522,7 +543,9 @@ def _run_query(
         log_nl_query(
             db_url, question=question, status="generation_error",
             error_message=str(e), path="ai_sql",
-        )
+        
+                session_id=session_id,
+            )
         return {"ok": False, "kind": "generation", "msg": str(e)}
 
     except AIClientError as e:
@@ -533,7 +556,9 @@ def _run_query(
         log_nl_query(
             db_url, question=question, status="generation_error",
             error_message=str(e), path="ai_sql",
-        )
+        
+                session_id=session_id,
+            )
         return {"ok": False, "kind": "ai_error", "msg": str(e)}
 
     except ExecutionError as e:
@@ -552,7 +577,9 @@ def _run_query(
             path="ai_sql",
             from_cache=sql_from_cache,
             raw_response=generated.raw_response if generated else None,
-        )
+        
+                session_id=session_id,
+            )
         return {
             "ok": False,
             "kind": "execution",
@@ -919,6 +946,7 @@ def render_ask_tab(
             trimmed, ai_client, db_url_readonly, db_url,
             last_ticker=st.session_state.ask_last_ticker,
             recent_turns=tuple(st.session_state.ask_recent_turns),
+            session_id=st.session_state.get("_session_id"),
         )
         thinking.empty()
         st.session_state.ask_history.append(

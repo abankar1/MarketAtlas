@@ -130,6 +130,50 @@ def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None
     st.session_state["date_to"]   = max(min_day, min(d_to,   end_max_day))
 
 
+def _get_session_device() -> tuple[str | None, bool | None]:
+    """
+    Read the browser User-Agent once per session from st.context.headers
+    (Streamlit 1.33+) and derive a coarse mobile/desktop flag.
+
+    Cached in session_state so we don't repeat the header lookup on every
+    rerun. Returns (user_agent, is_mobile) — either may be None if headers
+    aren't exposed (older Streamlit, certain proxy configs).
+    """
+    if "_device_classified" in st.session_state:
+        return (
+            st.session_state.get("_device_user_agent"),
+            st.session_state.get("_device_is_mobile"),
+        )
+
+    user_agent: str | None = None
+    is_mobile: bool | None = None
+    try:
+        # st.context.headers behaves dict-like but is case-insensitive in
+        # recent Streamlit versions. Guard anyway in case the context API
+        # is absent or empty.
+        headers = getattr(st.context, "headers", None)
+        if headers is not None:
+            user_agent = headers.get("User-Agent") or headers.get("user-agent")
+    except Exception:
+        user_agent = None
+
+    if user_agent:
+        # Coarse classification — the raw UA is also stored so any
+        # downstream analyst can re-classify with finer rules later.
+        # iPad is intentionally NOT counted as mobile: Apple's UA reports
+        # it as desktop and viewport-wise it behaves more like one.
+        ua_lower = user_agent.lower()
+        is_mobile = any(
+            marker in ua_lower
+            for marker in ("mobile", "android", "iphone", "ipod")
+        )
+
+    st.session_state["_device_user_agent"] = user_agent
+    st.session_state["_device_is_mobile"] = is_mobile
+    st.session_state["_device_classified"] = True
+    return user_agent, is_mobile
+
+
 def _on_tab_click(tab_name: str, db_url: str = "") -> None:
     """on_click callback for custom tab navigation buttons."""
     prev = st.session_state.get("active_tab")
@@ -146,12 +190,15 @@ def _on_tab_click(tab_name: str, db_url: str = "") -> None:
         flush=True,
     )
     if db_url:
+        ua, is_mobile = _get_session_device()
         log_usage_event(
             db_url,
             session_id=st.session_state.get("_session_id", "unknown"),
             event_type="tab_change",
             from_tab=prev,
             to_tab=tab_name,
+            user_agent=ua,
+            is_mobile=is_mobile,
         )
 
 
@@ -629,11 +676,14 @@ def main() -> None:
     # see "default-tab views" even when the user never clicks. Hardcoded to
     # "Heatmap" — the default in the _TABS init below.
     if not st.session_state.get("_app_load_persisted"):
+        ua, is_mobile = _get_session_device()
         log_usage_event(
             db_url,
             session_id=st.session_state.get("_session_id", "unknown"),
             event_type="session_load",
             to_tab="Heatmap",
+            user_agent=ua,
+            is_mobile=is_mobile,
         )
         st.session_state["_app_load_persisted"] = True
 
@@ -781,6 +831,60 @@ def main() -> None:
         f"· {_tm_slots} of {cache_size} slots used"
     )
     st.sidebar.caption(f"OHLCV: {_ov_slots} series cached")
+
+    # First-load hint for phone users — rendered RIGHT BEFORE the data
+    # spinner so the 4s animation plays while the user is idle waiting
+    # for the heatmap to load. Best attention moment: nothing else is
+    # on screen to compete for the eye. position:fixed + high z-index
+    # + pointer-events:none means it overlays the spinner cleanly
+    # without blocking taps. Shown once per session.
+    _, is_mobile = _get_session_device()
+    if is_mobile and not st.session_state.get("_mobile_hint_shown"):
+        st.markdown(
+            """
+            <div class="mobile-best-experience-hint">
+              ⚡ Use desktop for best experience
+            </div>
+            <style>
+            @keyframes mobile-hint-fade {
+              0%   { opacity: 0; transform: translateY(-8px); }
+              12%  { opacity: 1; transform: translateY(0);    }
+              88%  { opacity: 1; transform: translateY(0);    }
+              100% { opacity: 0; transform: translateY(-8px); }
+            }
+            .mobile-best-experience-hint {
+              position: fixed;
+              /* Push below Streamlit's top header strip. 3.5rem clears
+                 it on both minimal and full toolbar modes. */
+              top: 3.5rem;
+              /* Center via auto margins on a max-content-wide element
+                 instead of left:50% + translateX(-50%). The latter
+                 broke when an ancestor (Streamlit's app shell) has a
+                 transform, since that re-establishes the containing
+                 block for fixed-position descendants and the 50% no
+                 longer maps to the viewport center. */
+              left: 0;
+              right: 0;
+              margin-inline: auto;
+              width: max-content;
+              max-width: calc(100vw - 2rem);
+              transform: translateY(-8px);
+              background: rgba(0, 0, 0, 0.82);
+              color: #fff;
+              font-size: 0.85rem;
+              padding: 0.5rem 0.9rem;
+              border-radius: 999px;
+              /* Streamlit's stHeader uses ~999990. Sit above it. */
+              z-index: 9999999;
+              pointer-events: none;
+              opacity: 0;
+              animation: mobile-hint-fade 4s ease forwards;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state["_mobile_hint_shown"] = True
 
     # -----------------------------------------------------------------------
     # Data fetch (shared across all views)

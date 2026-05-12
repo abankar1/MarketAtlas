@@ -219,6 +219,7 @@ def log_nl_query(
     template_params: dict | None = None,    # bound params for replay
     from_cache: bool = False,               # served from in-process LLM cache
     raw_response: str | None = None,        # raw model output (router JSON or SQL block)
+    session_id: str | None = None,          # joins to usage_events.session_id
 ) -> None:
     """
     Insert a row into nl_queries. Best-effort — never raises into the UI.
@@ -243,14 +244,14 @@ def log_nl_query(
                       input_tokens, output_tokens,
                       cache_read_tokens, cache_creation_tokens,
                       path, template_name, template_params,
-                      from_cache, raw_response
+                      from_cache, raw_response, session_id
                     ) VALUES (
                       %s, %s, %s, %s,
                       %s, %s,
                       %s, %s,
                       %s, %s,
                       %s, %s, %s::jsonb,
-                      %s, %s
+                      %s, %s, %s
                     )
                     """,
                     (
@@ -259,7 +260,7 @@ def log_nl_query(
                         input_tokens, output_tokens,
                         cache_read_tokens, cache_creation_tokens,
                         path, template_name, template_params_json,
-                        from_cache, raw_response,
+                        from_cache, raw_response, session_id,
                     ),
                 )
             conn.commit()
@@ -295,7 +296,9 @@ def _ensure_usage_events_table(conn: psycopg.Connection) -> None:
               session_id  TEXT NOT NULL,
               event_type  TEXT NOT NULL,
               from_tab    TEXT,
-              to_tab      TEXT
+              to_tab      TEXT,
+              user_agent  TEXT,
+              is_mobile   BOOLEAN
             )
             """
         )
@@ -316,6 +319,8 @@ def _log_usage_event_sync(
     event_type: str,
     from_tab: str | None = None,
     to_tab: str | None = None,
+    user_agent: str | None = None,
+    is_mobile: bool | None = None,
 ) -> None:
     """The actual blocking DB write — runs inside the daemon thread."""
     try:
@@ -325,10 +330,14 @@ def _log_usage_event_sync(
                 cur.execute(
                     """
                     INSERT INTO usage_events (
-                      session_id, event_type, from_tab, to_tab
-                    ) VALUES (%s, %s, %s, %s)
+                      session_id, event_type, from_tab, to_tab,
+                      user_agent, is_mobile
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
                     """,
-                    (session_id, event_type, from_tab, to_tab),
+                    (
+                        session_id, event_type, from_tab, to_tab,
+                        user_agent, is_mobile,
+                    ),
                 )
             conn.commit()
     except Exception:
@@ -342,9 +351,11 @@ def log_usage_event(
     db_url: str,
     *,
     session_id: str,
-    event_type: str,            # 'session_load' | 'tab_change'
+    event_type: str,                  # 'session_load' | 'tab_change'
     from_tab: str | None = None,
     to_tab: str | None = None,
+    user_agent: str | None = None,    # raw User-Agent header
+    is_mobile: bool | None = None,    # derived classification
 ) -> None:
     """
     Fire-and-forget logger for usage_events. Returns to the caller in
@@ -355,6 +366,11 @@ def log_usage_event(
     to stderr. Daemon threads die with the process, so an event in flight
     when the process exits is lost — acceptable for low-volume events
     like tab clicks.
+
+    user_agent / is_mobile are captured once per session (server-side via
+    st.context.headers) and threaded through every event so an analyst
+    can filter the full event stream by device without joining a
+    separate session table.
     """
     import threading
     threading.Thread(
@@ -365,6 +381,8 @@ def log_usage_event(
             "event_type": event_type,
             "from_tab": from_tab,
             "to_tab": to_tab,
+            "user_agent": user_agent,
+            "is_mobile": is_mobile,
         },
         daemon=True,
     ).start()

@@ -155,14 +155,22 @@ Marketaux's free tier is 100 requests/day. Headlines are cached per-symbol for 1
 Ask questions in plain English and get an answer plus the data. Example:
 *"Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?"*
 
+**Scope banner**
+A short caption at the very top of the tab sums up what's available — a decade of daily price + volume for the S&P 500, NASDAQ-100, and Dow 30 (~600 stocks). The AI will refuse out-of-scope questions like fundamentals (P/E, market cap), forecasts, news, sentiment, options, and intraday data — those simply aren't in the database.
+
 **Example chips**
-Six pre-canned questions cover the most common shapes — sector returns, single-stock volume, top movers, daily-volume spikes, sector performance, and stocks down sharply. Tap one to run it immediately.
+Pre-canned questions cover the most common shapes. Desktop sees six full-sentence prompts in two columns (sector returns, single-stock volume, top movers, sector performance, daily-volume spikes, stocks down sharply). Mobile gets a tighter set of four shorter labels in a single stack so the chips don't eat the viewport. Tap one to run it immediately.
 
 **Chat input**
-Type any question and press Enter. Each answer comes with:
+Type any question and press Enter. The submission UI is chat-style:
+
+1. The instant you submit, your question card appears at the bottom of the conversation with an animated "Thinking…" indicator and the page glides down to land on it.
+2. When the answer is ready, the indicator is replaced in place by the actual result and the page glides again so the new Q/A sits flush above the chat input.
+
+Each answer card includes:
 - A 1-line plain-English summary at the top
 - The result table (sortable, capped at 1,000 rows)
-- A "cached" badge if the AI decision came from cache (no new API call)
+- A subtle "instant response" hint when the AI decision came from cache (no new API call)
 - A row count and duration in milliseconds
 
 **Multi-turn memory**
@@ -172,10 +180,7 @@ The last few turns are carried into each new question, so follow-ups work:
 - *"Now show their average volume"* → resolves "their" to the symbols just listed
 - *"What about over 90 days?"* → keeps the same symbols, swaps the window
 
-Click **Clear history** to drop the memory and start fresh.
-
-**Scope**
-The disclaimer just above the chat input sums it up: a decade of daily price + volume for the S&P 500, NASDAQ-100, and Dow 30 (~600 stocks). The AI will refuse out-of-scope questions like fundamentals (P/E, market cap), forecasts, news, sentiment, options, and intraday data — those simply aren't in the database.
+Click **Clear history** to drop the memory and start fresh. On mobile the Clear-history button is sized to match the example chips so it doesn't dominate the screen.
 
 **Configuration**
 Requires `anthropic_api_key` (Claude API) and `db_url_readonly` (a Postgres role with SELECT-only privileges) in the config. The Ask AI tab can't write to the database — its SQL is validated and runs with a 15-second timeout on a read-only connection.
