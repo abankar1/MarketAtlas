@@ -224,7 +224,7 @@ A managed deployment stack is documented in [docs/deployment.md](docs/deployment
 
 - **Streamlit Community Cloud** serves the dashboard from the `release` branch
 - **Tigerdata Cloud** (managed TimescaleDB) holds the data
-- **GitHub Actions** (`.github/workflows/daily-update.yml`) runs `python -m src.main` on a cron schedule (Mon/Wed/Fri 09:00 UTC) so the cloud DB stays current
+- **GitHub Actions** (`.github/workflows/daily-update.yml`) runs `python -m src.main` on a cron schedule (Tue–Sat 09:00 UTC, after each trading day) so the cloud DB stays current
 
 Five tabs, all driven by the same sidebar filters:
 
@@ -359,7 +359,7 @@ Market Atlas/
 │   ├── deployment.md                   # Streamlit Cloud + Tigerdata Cloud + GHA runbook
 │   └── timescaledb-cheatsheet.md       # Database setup SQL + reference
 ├── .github/workflows/
-│   └── daily-update.yml                # GHA cron: market data refresh (Mon/Wed/Fri 09:00 UTC)
+│   └── daily-update.yml                # GHA cron: market data refresh (Tue–Sat 09:00 UTC)
 ├── .streamlit/
 │   ├── config.toml                     # toolbarMode = "minimal"
 │   └── secrets.toml.example            # committed template for Streamlit Cloud secrets UI

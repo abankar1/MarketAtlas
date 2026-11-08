@@ -53,19 +53,19 @@ from src.db.repositories import log_nl_query
 # any answer renders. Both lists are rendered server-side; CSS in
 # render_ask_tab() hides the wrong set per viewport.
 EXAMPLE_QUESTIONS_DESKTOP = [
-    "Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?",
-    "What's the average daily volume for NVDA over the past 90 days?",
-    "Show me the top 10 NASDAQ-100 stocks by return over the past week.",
-    "How is Information Technology performing this month?",
-    "Which stocks are down more than 20% this quarter?",
-    "Find symbols where today's volume is at least 3x the 20-day average.",
+    "How are the Magnificent 7 stocks performing over the past month?",
+    "What are the biggest Information Technology decliners over the last 30 days?",
+    "Which sectors are holding up best over the past month?",
+    "How far is NVDA trading below its 52-week high?",
+    "How have the new NASDAQ-100 additions CRWV, NBIS and ALAB done over the past 3 months?",
+    "Which S&P 500 stocks hit a new 52-week low in the past week?",
 ]
 
 EXAMPLE_QUESTIONS_MOBILE = [
-    "Health Care stocks up >10% in 30 days",
-    "NVDA average daily volume — last 90 days",
-    "Top 10 NASDAQ-100 movers this week",
-    "Stocks down more than 20% this quarter",
+    "Magnificent 7 performance this month",
+    "Biggest tech decliners in the last 30 days",
+    "NVDA vs its 52-week high",
+    "S&P 500 stocks at new 52-week lows this week",
 ]
 
 
