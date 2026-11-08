@@ -82,6 +82,69 @@ class DailyBarImporter:
             return 0
 
         candles = self._client.fetch_daily(symbol=symbol, days=days_to_fetch)
+        return self._store(symbol, candles)
+
+    # ------------------------------------------------------------------
+    # Batched top-up: up to 100 symbols per Marketstack request
+    # ------------------------------------------------------------------
+
+    _BATCH_OVERLAP_DAYS = 3
+
+    def latest_bar_dates(self, symbols: list[str]) -> dict[str, dt.date]:
+        """Latest stored bar date per symbol, in one query. Missing = no bars."""
+        q = """
+            SELECT symbol, max(ts)::date
+            FROM public.daily_bars
+            WHERE symbol = ANY(%s)
+            GROUP BY symbol
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(q, (list(symbols),))
+            return {sym: d for sym, d in cur.fetchall() if d is not None}
+
+    def import_batch(self, symbols: list[str]) -> dict[str, int]:
+        """
+        Top up symbols that already have history using one request per 100
+        symbols. Each chunk fetches from (oldest latest-bar in the chunk -
+        overlap) to today; upserts make the overlap harmless. Chunks are
+        built from symbols sorted by latest bar date so a lagging symbol
+        doesn't widen the date range for 99 up-to-date ones.
+
+        Returns {symbol: rows upserted} for every requested symbol
+        (0 when Marketstack returned nothing for it).
+        """
+        latest = self.latest_bar_dates(symbols)
+        ordered = sorted(symbols, key=lambda s: (latest.get(s) or dt.date.min, s))
+        size = self._client.MAX_SYMBOLS_PER_REQUEST
+        today = dt.date.today()
+        result: dict[str, int] = {}
+
+        for i in range(0, len(ordered), size):
+            chunk = ordered[i : i + size]
+            oldest = min(latest[s] for s in chunk)
+            date_from = oldest - dt.timedelta(days=self._BATCH_OVERLAP_DAYS)
+            rows = self._client.fetch_eod_batch(chunk, date_from, today)
+
+            by_symbol: dict[str, list[dict[str, Any]]] = {s: [] for s in chunk}
+            for r in rows:
+                sym = (r.get("symbol") or "").upper()
+                # Marketstack may echo class shares with a dot (BRK.B);
+                # the DB stores the hyphen form (BRK-B).
+                if sym not in by_symbol:
+                    sym = sym.replace(".", "-")
+                if sym in by_symbol:
+                    by_symbol[sym].append(r)
+
+            for sym in chunk:
+                result[sym] = self._store(sym, by_symbol[sym], commit=False)
+            self._conn.commit()
+
+        return result
+
+    def _store(
+        self, symbol: str, candles: list[dict[str, Any]], *, commit: bool = True
+    ) -> int:
+        """Upsert asset metadata + bars for one symbol. Returns rows written."""
         if not candles:
             return 0
 
@@ -129,7 +192,8 @@ class DailyBarImporter:
 
         repositories.upsert_daily_bars(self._conn, bars)
 
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return len(bars)
 
 

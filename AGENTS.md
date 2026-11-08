@@ -74,7 +74,7 @@ repo root/
 │   ├── test_query_templates.py         # template render + ParamSpec tests
 │   └── test_validate_sql.py            # SQL validator safety tests
 ├── .github/workflows/
-│   └── daily-update.yml                # GHA cron: market data refresh M/W/F at 09:00 UTC
+│   └── daily-update.yml                # GHA cron: market data refresh Tue–Sat at 09:00 UTC
 ├── .streamlit/
 │   ├── config.toml                     # toolbarMode = "minimal"
 │   ├── secrets.toml.example            # committed template for Streamlit Cloud secrets UI
@@ -242,8 +242,15 @@ in `repositories.py`.
 2. For newly added symbols, calls `ensure_sectors()` for classification
 3. Fetches active symbols from all three index tables
 4. Deduplicates across indices
-5. For each symbol, calls `DailyBarImporter.import_symbol()`
-6. Prints per-symbol counts and a summary of data freshness
+5. Symbols that already have bars → `DailyBarImporter.import_batch()` (100 symbols per Marketstack request, ~6 requests for the full universe)
+6. Symbols with no bars yet → `DailyBarImporter.import_symbol()` one at a time (long first fetch)
+7. Prints the Marketstack request count and how many symbols are current through the latest trading day. Exits non-zero only if the batched top-up fails; a single unservable new ticker does not fail the job. API keys are redacted from error output.
+
+### Batched Top-up (`DailyBarImporter.import_batch`)
+1. `latest_bar_dates(symbols)` → one query for every symbol's latest bar date
+2. Sort symbols by latest date and chunk into groups of 100 (`MarketDataClient.MAX_SYMBOLS_PER_REQUEST`) so one lagging symbol doesn't widen the date range for the others
+3. Per chunk: `client.fetch_eod_batch(chunk, oldest_latest - 3 days, today)` → one request unless the result exceeds 1000 rows
+4. Rows grouped by their `symbol` field (dot class shares like `BRK.B` mapped back to `BRK-B`), then upserted per symbol; one commit per chunk
 
 ### Constituent Sync (`src/services/constituent_sync.py`)
 1. `fetch_remote(index_name)` → HTTP GET Wikipedia page, parse table with `id="constituents"` via `pandas.read_html`, normalize symbols (BRK.B → BRK-B)

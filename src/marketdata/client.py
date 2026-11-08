@@ -32,10 +32,75 @@ import requests
 
 
 class MarketDataClient:
+    # Marketstack rejects more than 100 comma-separated symbols per request.
+    MAX_SYMBOLS_PER_REQUEST = 100
+
     def __init__(self, token: str, timeout_s: int = 30, sleep_s: float = 0.5):
         self._token = token
         self._timeout_s = timeout_s
         self._sleep_s = sleep_s
+        # Number of HTTP requests made (each one counts against the
+        # Marketstack monthly quota). Reported at the end of a run.
+        self.requests_made = 0
+
+    def _get(self, params: dict[str, Any]) -> dict[str, Any]:
+        resp = requests.get(
+            "https://api.marketstack.com/v2/eod",
+            params={**params, "access_key": self._token},
+            timeout=self._timeout_s,
+        )
+        self.requests_made += 1
+        resp.raise_for_status()
+        return resp.json()
+
+    def fetch_eod_batch(
+        self,
+        symbols: list[str],
+        date_from: dt.date,
+        date_to: dt.date,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch EOD bars for up to 100 symbols in one request (plus extra
+        pages only if the result exceeds 1000 rows).
+
+        For a daily top-up — 100 symbols x a few days — that is a single
+        request, versus one request per symbol with `fetch_daily`.
+        Rows carry their own `symbol` field; order is not guaranteed.
+        """
+        if not symbols:
+            return []
+        if len(symbols) > self.MAX_SYMBOLS_PER_REQUEST:
+            raise ValueError(
+                f"at most {self.MAX_SYMBOLS_PER_REQUEST} symbols per request, "
+                f"got {len(symbols)}"
+            )
+
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            payload = self._get(
+                {
+                    "symbols": ",".join(symbols),
+                    "date_from": date_from.isoformat(),
+                    "date_to": date_to.isoformat(),
+                    "limit": 1000,
+                    "offset": offset,
+                }
+            )
+            data = payload.get("data") or []
+            if not isinstance(data, list):
+                raise ValueError("Unexpected batch response: data is not a list")
+            rows.extend(data)
+
+            pagination = payload.get("pagination") or {}
+            count = int(pagination.get("count") or len(data))
+            total = int(pagination.get("total") or len(data))
+            if not data or count == 0 or (offset + count) >= total:
+                break
+            offset += count
+            time.sleep(self._sleep_s)
+
+        return rows
 
     def fetch_daily_range(
         self,
@@ -73,6 +138,7 @@ class MarketDataClient:
             resp = requests.get(
                 url, headers=headers, params=params, timeout=self._timeout_s
             )
+            self.requests_made += 1
             resp.raise_for_status()
 
             payload = resp.json()
@@ -125,6 +191,7 @@ class MarketDataClient:
             resp = requests.get(
                 url, headers=headers, params=params, timeout=self._timeout_s
             )
+            self.requests_made += 1
             resp.raise_for_status()
 
             payload = resp.json()
