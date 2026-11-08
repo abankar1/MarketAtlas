@@ -54,3 +54,8 @@ backups/
 
 # Documentation is tracked in the repo
 # (AGENTS.md and docs/ are intentionally committed)
+.neon
+node_modules/
+.env
+.env.local
+.env.*.local
