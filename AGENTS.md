@@ -421,8 +421,8 @@ Seven membership buckets (all mutual-exclusion combinations of S&P 500 / NASDAQ-
 
 Wikipedia URLs (constituent table is identified by `id="constituents"` on each page):
 - sp500: `https://en.wikipedia.org/wiki/List_of_S%26P_500_companies`
-- nasdaq100: `https://en.wikipedia.org/wiki/Nasdaq-100`
-- dow30: `https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average`
+- nasdaq100: `https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies`
+- dow30: `https://en.wikipedia.org/wiki/List_of_Dow_Jones_Industrial_Average_companies`
 
 Symbol/name column names vary across pages. Resolved by case-insensitive
 alias match: symbol from {`Symbol`, `Ticker`}, name from {`Security`,

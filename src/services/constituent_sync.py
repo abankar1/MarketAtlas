@@ -35,8 +35,8 @@ import psycopg
 
 WIKIPEDIA_URLS: dict[str, str] = {
     "sp500":    "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-    "nasdaq100": "https://en.wikipedia.org/wiki/Nasdaq-100",
-    "dow30":    "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average",
+    "nasdaq100": "https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies",
+    "dow30":    "https://en.wikipedia.org/wiki/List_of_Dow_Jones_Industrial_Average_companies",
 }
 
 # Browser-style UA so Wikipedia doesn't 403 us as a generic bot.
