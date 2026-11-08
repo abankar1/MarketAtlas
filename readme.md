@@ -254,8 +254,8 @@ the constituent tables on Wikipedia (community-maintained, typically same-day
 for additions/deletions, no API key required):
 
 - S&P 500: <https://en.wikipedia.org/wiki/List_of_S%26P_500_companies>
-- NASDAQ-100: <https://en.wikipedia.org/wiki/Nasdaq-100>
-- Dow 30: <https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average>
+- NASDAQ-100: <https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies>
+- Dow 30: <https://en.wikipedia.org/wiki/List_of_Dow_Jones_Industrial_Average_companies>
 
 - **Additions** — new symbols are inserted into the constituent table and a minimal `assets` row is created
 - **Removals** — dropped symbols are soft-deleted (`is_active = FALSE`, `removed_date` recorded) so historical data is preserved
