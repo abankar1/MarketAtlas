@@ -24,6 +24,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 # Developer-only sidebar/UI affordances are gated behind the same env var
@@ -117,6 +118,26 @@ def _preset_dates(key: str) -> tuple[dt.date, dt.date]:
         else today - dt.timedelta(days=days_back)
     )
     return d_from, today
+
+
+def _freshness_label(latest: dt.date, today: dt.date | None = None) -> str:
+    """
+    One-line data-age note for the header, e.g.
+    "Prices as of Fri, Nov 6, 2026 close · 2 days ago".
+
+    `today` defaults to the current date in US/Eastern (the market's
+    timezone), so the age doesn't jump a day early on a UTC server.
+    """
+    if today is None:
+        today = dt.datetime.now(ZoneInfo("America/New_York")).date()
+    age = (today - latest).days
+    if age <= 0:
+        rel = "today"
+    elif age == 1:
+        rel = "yesterday"
+    else:
+        rel = f"{age} days ago"
+    return f"Prices as of {latest:%a, %b} {latest.day}, {latest.year} close · {rel}"
 
 
 def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None:
@@ -307,6 +328,13 @@ def main() -> None:
                mobile rules in @media (max-width: 640px) below stay
                untouched. */
             margin-top: 0.25rem !important;
+          }
+          /* "Prices as of …" freshness line: tuck it right under the
+             subtitle caption instead of a full block-gap below it. */
+          [data-testid="stElementContainer"]:has(h1)
+            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"])
+            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
+            margin-top: -0.85rem !important;
           }
         }
 
@@ -652,6 +680,10 @@ def main() -> None:
 
     st.title("Market Atlas")
     st.caption("AI-Powered Market Intelligence Web App")
+    # Filled in once the latest bar date is known (after the DB bounds query
+    # below). A separate element rather than part of the subtitle caption,
+    # because the mobile CSS hides that caption and redraws it via h1::after.
+    freshness_slot = st.empty()
 
     cfg = load_config()
     db_url = (cfg.get("db_url") or "").strip()
@@ -716,6 +748,7 @@ def main() -> None:
         st.stop()
 
     end_max_day = max(min_day, max_day)
+    freshness_slot.caption(_freshness_label(max_day))
 
     # -----------------------------------------------------------------------
     # Sidebar — quick-range preset buttons
