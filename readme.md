@@ -7,7 +7,7 @@
 Market Atlas is a data-driven platform that:
 
 - Ingests daily OHLCV stock data for S&P 500, NASDAQ-100, and Dow 30
-- Stores it in PostgreSQL with the TimescaleDB extension (time-series optimized)
+- Stores it in PostgreSQL (hosted on Neon)
 - Provides an interactive Streamlit dashboard — treemap heatmap, sector breadth, per-stock candlestick charts with technical indicators, per-symbol news with sentiment, and index overlap analysis
 - Auto-syncs index constituents from Wikipedia (S&P 500, NASDAQ-100, Dow 30 pages)
 - Supports 10-year historical backfill and incremental daily updates
@@ -17,10 +17,10 @@ Market Atlas is a data-driven platform that:
 ## Prerequisites
 
 - **Python 3.12+** (Streamlit Cloud runs 3.12; local works on 3.12-3.14)
-- **PostgreSQL 14+** with the **TimescaleDB extension** installed
-  - macOS: `brew install timescaledb` then follow post-install steps
-  - Or use [Tigerdata Cloud](https://console.cloud.timescale.com) (managed TimescaleDB) — see [docs/deployment.md](docs/deployment.md)
-  - See [docs/timescaledb-cheatsheet.md](docs/timescaledb-cheatsheet.md) for hypertable setup, compression, and retention policies
+- **PostgreSQL 14+**
+  - Local: e.g. `brew install postgresql@17`
+  - Or hosted on [Neon](https://neon.com) (free tier) — see [docs/deployment.md](docs/deployment.md)
+  - Table and role SQL: [docs/database-setup.md](docs/database-setup.md)
 - A [Marketstack](https://marketstack.com) API access key (`marketdata_token`)
 - An [Anthropic](https://console.anthropic.com) API key (`anthropic_api_key`) — required for the Ask AI tab; also used for AI-based GICS sector classification
 - *(Optional)* A [Marketaux](https://www.marketaux.com) API key (`marketaux_token`) — enables the News tab (free tier: 100 requests/day)
@@ -79,25 +79,24 @@ Edit `src/config/configuration.json`:
 
 > `src/config/configuration.json` is git-ignored and will never be committed.
 >
-> For cloud deployment (Streamlit Cloud + Tigerdata Cloud + GitHub Actions
+> For cloud deployment (Streamlit Cloud + Neon + GitHub Actions
 > daily refresh), follow [docs/deployment.md](docs/deployment.md).
 
 ---
 
 ## Database Setup
 
-Ensure TimescaleDB is running and the required tables exist before running any importers.
-See [docs/timescaledb-cheatsheet.md](docs/timescaledb-cheatsheet.md) for the full SQL to:
-- Create `assets`, `daily_bars`, `sp500_constituents`, `nasdaq100_constituents`, `dow30_constituents`
-- Convert `daily_bars` to a hypertable
-- Set retention/compression policies
+Ensure Postgres is running and the required tables exist before running any importers.
+[docs/database-setup.md](docs/database-setup.md) has the SQL to create
+`assets`, `daily_bars`, the three constituent tables, the `nl_queries` audit
+table and the read-only `atlas_reader` role.
 
 ---
 
 ## Ask AI tab setup (one-time)
 
 The Ask AI tab needs a separate read-only Postgres role plus the `nl_queries`
-audit table. For Tigerdata Cloud, see [docs/deployment.md](docs/deployment.md)
+audit table. For Neon, see [docs/deployment.md](docs/deployment.md)
 (Phase 1). For a local Postgres:
 
 ```sql
@@ -223,7 +222,7 @@ streamlit run src/dashboard/app.py
 A managed deployment stack is documented in [docs/deployment.md](docs/deployment.md):
 
 - **Streamlit Community Cloud** serves the dashboard from the `release` branch
-- **Tigerdata Cloud** (managed TimescaleDB) holds the data
+- **Neon** (managed Postgres, free tier) holds the data
 - **GitHub Actions** (`.github/workflows/daily-update.yml`) runs `python -m src.main` on a cron schedule (Tue–Sat 09:00 UTC, after each trading day) so the cloud DB stays current
 
 Five tabs, all driven by the same sidebar filters:
@@ -271,10 +270,9 @@ python -m src.sync_constituents
 
 ## Backup
 
-For local Postgres, `pg_dump` is the standard route. For Tigerdata Cloud,
-see the migration recipe in [docs/deployment.md](docs/deployment.md) Phase 2
-(includes the `timescaledb_pre_restore()` / `timescaledb_post_restore()`
-incantation needed when restoring TimescaleDB hypertables).
+`pg_dump` works for both local Postgres and Neon (use Neon's direct, non-pooled
+connection string). Neon also keeps point-in-time restore history; see
+[docs/deployment.md](docs/deployment.md) Phase 2 for copying data between databases.
 
 ---
 
@@ -356,8 +354,8 @@ Market Atlas/
 │   └── sync_constituents.py            # Constituent sync entry point
 ├── docs/
 │   ├── user-guide.md                   # Dashboard user guide
-│   ├── deployment.md                   # Streamlit Cloud + Tigerdata Cloud + GHA runbook
-│   └── timescaledb-cheatsheet.md       # Database setup SQL + reference
+│   ├── deployment.md                   # Streamlit Cloud + Neon + GHA runbook
+│   └── database-setup.md               # Table + read-only role SQL
 ├── .github/workflows/
 │   └── daily-update.yml                # GHA cron: market data refresh (Tue–Sat 09:00 UTC)
 ├── .streamlit/

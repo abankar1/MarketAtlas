@@ -10,7 +10,7 @@ caching, and known behavioral constraints.
 
 **Type:** Streamlit dashboard + Python data pipeline + Anthropic LLM-backed Ask AI tab  
 **Purpose:** Track and visualize price performance of S&P 500, NASDAQ-100, and Dow 30 constituents; answer natural-language questions about historical price/volume.  
-**Stack:** Python 3.12 (cloud) / 3.14 (local), Streamlit, TimescaleDB (PostgreSQL on Tigerdata Cloud), psycopg3, Plotly, Pandas, Marketstack API, Anthropic API.  
+**Stack:** Python 3.12 (cloud) / 3.14 (local), Streamlit, PostgreSQL (hosted on Neon), psycopg3, Plotly, Pandas, Marketstack API, Anthropic API.  
 **Hosting:** Streamlit Community Cloud serves the dashboard from the `release` branch; GitHub Actions runs the daily-update job (cron in `.github/workflows/daily-update.yml`) from `main`.  
 **Working directory:** repo root (all `python -m` commands run from here)
 
@@ -65,8 +65,8 @@ repo root/
 │   └── gics_sectors.json               # static {symbol: gics_sector} map (532 symbols)
 ├── docs/
 │   ├── user-guide.md                   # End-user dashboard guide
-│   ├── deployment.md                   # Streamlit Cloud + Tigerdata Cloud + GHA runbook
-│   └── timescaledb-cheatsheet.md       # TimescaleDB SQL reference
+│   ├── deployment.md                   # Streamlit Cloud + Neon + GHA runbook
+│   └── database-setup.md               # Table + read-only role SQL
 ├── tests/
 │   ├── test_ai_cache.py                # Cache key + TTL tests
 │   ├── test_intent_router.py           # Routing + parsing tests
@@ -149,7 +149,7 @@ Primary metadata table. One row per symbol.
 | updated_at      | TIMESTAMPTZ |                                    |
 
 ### `public.daily_bars`
-TimescaleDB hypertable. One row per symbol per trading day.
+Time-series table, indexed on `ts`. One row per symbol per trading day.
 
 | Column      | Type        | Notes                   |
 |-------------|-------------|-------------------------|
@@ -589,7 +589,7 @@ Fragment parameters are passed by the full-page render and are frozen for the li
 
 17. **The Ask AI tab caches LLM decisions, never DB results.** Three LRU+TTL caches in `src/ai/cache.py` (route, ai_sql, narrate). Keys fold `PROMPT_VERSION` so a one-character bump invalidates every stale entry on the next deploy — far more robust than manual cache clears. Templates re-execute against current DB state every time. Errors are not cached.
 
-18. **Filter `daily_bars.ts` directly — never wrap it in a function inside WHERE.** TimescaleDB chunk pruning only kicks in when the partition column appears unwrapped in the WHERE clause. `WHERE (ts AT TIME ZONE 'UTC')::date >= …` disables pruning and turns a 90ms query into a 5+ second full-hypertable scan. Use `WHERE ts >= NOW() - INTERVAL '30 days'` instead. The schema docstring in `nl_to_sql.py` calls this out for the LLM as well.
+18. **Filter `daily_bars.ts` directly — never wrap it in a function inside WHERE.** Postgres can only prune by date when `ts` appears unwrapped in the WHERE clause. `WHERE (ts AT TIME ZONE 'UTC')::date >= …` disables pruning and turns a 90ms query into a 5+ second full-table scan. Use `WHERE ts >= NOW() - INTERVAL '30 days'` instead. The schema docstring in `nl_to_sql.py` calls this out for the LLM as well.
 
 19. **Hide Streamlit's "Ask Google" / "Ask ChatGPT" helper anchors.** Streamlit 1.31+ injects them next to `st.error` / `st.exception` widgets. They surface internal SQL/error text to third-party AI tools. Global CSS in `app.py` hides any anchor with `href*="google.com/search"`, `chatgpt.com/?q="`, or `chat.openai.com/?q="`. The native "Copy" button is preserved.
 

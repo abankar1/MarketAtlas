@@ -2,7 +2,7 @@
 
 Market Atlas is a market intelligence dashboard for tracking price performance
 across the S&P 500, NASDAQ-100, and Dow 30. It pulls historical and daily price
-data from Marketstack, stores it in a local TimescaleDB database, and surfaces
+data from Marketstack, stores it in a PostgreSQL database, and surfaces
 it through an interactive Streamlit dashboard.
 
 ---

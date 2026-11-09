@@ -34,8 +34,8 @@ CREATE TABLE daily_bars (
   symbol TEXT,                    -- FK to assets.symbol
   ts TIMESTAMPTZ,                 -- Filter on `ts` directly (e.g. `ts >= NOW() - INTERVAL '30 days'`).
                                   -- NEVER wrap `ts` in a function (e.g. `(ts AT TIME ZONE 'UTC')::date`)
-                                  -- inside WHERE — that disables TimescaleDB chunk pruning and turns a
-                                  -- 90ms query into a 5s query that scans every chunk.
+                                  -- inside WHERE — that stops Postgres using the time index and turns a
+                                  -- 90ms query into a 5s query that scans the whole table.
   open NUMERIC,
   high NUMERIC,
   low NUMERIC,
@@ -50,7 +50,7 @@ CREATE TABLE daily_bars (
   dividend NUMERIC,
   PRIMARY KEY (symbol, ts)
 );
--- daily_bars is a TimescaleDB hypertable. Queries over date ranges are fast.
+-- daily_bars is time-partitioned and indexed on ts. Queries over date ranges are fast.
 
 CREATE TABLE sp500_constituents (
   symbol TEXT PRIMARY KEY,
@@ -390,7 +390,7 @@ SELECT 'CANNOT_ANSWER' AS reason,
 
 SYSTEM_PROMPT = f"""\
 You are a SQL generator for MarketAtlas, a stock-market data warehouse running on
-PostgreSQL with the TimescaleDB extension.
+PostgreSQL.
 
 YOUR ONLY JOB is to convert the user's question into ONE PostgreSQL query.
 
@@ -402,15 +402,15 @@ ABSOLUTE RULES (never violate these):
    statement type.
 3. Always include LIMIT (max 1000) unless the query returns a single aggregate value.
 4. Filter on `ts` DIRECTLY using NOW() — NEVER wrap `ts` in a function in the WHERE
-   clause. `ts` is the partition column on the TimescaleDB hypertable, and any
-   function over it (like `(ts AT TIME ZONE 'UTC')::date`) disables chunk pruning
-   and forces a scan of all 537 chunks (~5s vs ~90ms).
+   clause. `daily_bars` is partitioned and indexed on `ts`, and any function
+   over it (like `(ts AT TIME ZONE 'UTC')::date`) stops Postgres pruning by date
+   and forces a scan of all ten years of bars (~5s vs ~90ms).
    So "past 30 days" becomes:
      WHERE b.ts >= NOW() - INTERVAL '30 days'
    For end-of-window scans (e.g. `end_px` to find each symbol's latest close),
    ALWAYS add a 14-day filter:
      WHERE b.ts >= NOW() - INTERVAL '14 days'
-   This keeps the scan to 1-2 chunks. The daily job runs every weekday, so 14 days
+   This keeps the scan to the last couple of weeks of bars. The daily job runs every weekday, so 14 days
    reliably contains the latest bar even after weekends/holidays. Casting to date
    for SELECT/projection is fine — the rule only matters in WHERE clauses on `ts`.
    Absolute date literals ('2024-01-01' etc.) are still fine when the user names a year.
