@@ -129,9 +129,9 @@ start_px AS (
   SELECT DISTINCT ON (b.symbol) b.symbol, b.adj_close AS px
   FROM daily_bars b
   JOIN universe u ON u.symbol = b.symbol
-  -- Filter on b.ts directly (not a function over it) so TimescaleDB
-  -- prunes chunks. Functions like (ts AT TIME ZONE 'UTC')::date kill
-  -- chunk pruning and force a scan of all 537 chunks (~5s vs ~90ms).
+  -- Filter on b.ts directly (not a function over it) so Postgres can
+  -- prune by date. Functions like (ts AT TIME ZONE 'UTC')::date disable
+  -- that and force a scan of all ten years of bars (~5s vs ~90ms).
   WHERE b.ts >= NOW() - INTERVAL '{days} days'
   ORDER BY b.symbol, b.ts ASC
 ),
@@ -140,7 +140,7 @@ end_px AS (
   FROM daily_bars b
   JOIN universe u ON u.symbol = b.symbol
   -- 14 days is enough to capture the latest trading day even after
-  -- weekends, holidays, and ingest delay, keeping the scan to 1-2 chunks.
+  -- weekends, holidays, and ingest delay, keeping the scan small.
   WHERE b.ts >= NOW() - INTERVAL '14 days'
   ORDER BY b.symbol, b.ts DESC
 )
@@ -206,9 +206,9 @@ start_px AS (
   SELECT DISTINCT ON (b.symbol) b.symbol, b.adj_close AS px
   FROM daily_bars b
   JOIN universe u ON u.symbol = b.symbol
-  -- Filter on b.ts directly (not a function over it) so TimescaleDB
-  -- prunes chunks. Functions like (ts AT TIME ZONE 'UTC')::date kill
-  -- chunk pruning and force a scan of all 537 chunks (~5s vs ~90ms).
+  -- Filter on b.ts directly (not a function over it) so Postgres can
+  -- prune by date. Functions like (ts AT TIME ZONE 'UTC')::date disable
+  -- that and force a scan of all ten years of bars (~5s vs ~90ms).
   WHERE b.ts >= NOW() - INTERVAL '{days} days'
   ORDER BY b.symbol, b.ts ASC
 ),
@@ -217,7 +217,7 @@ end_px AS (
   FROM daily_bars b
   JOIN universe u ON u.symbol = b.symbol
   -- 14 days is enough to capture the latest trading day even after
-  -- weekends, holidays, and ingest delay, keeping the scan to 1-2 chunks.
+  -- weekends, holidays, and ingest delay, keeping the scan small.
   WHERE b.ts >= NOW() - INTERVAL '14 days'
   ORDER BY b.symbol, b.ts DESC
 )
@@ -296,7 +296,7 @@ WITH recent AS (
          (ts AT TIME ZONE 'UTC')::date AS d,
          volume
   FROM daily_bars
-  -- Filter on `ts` directly so TimescaleDB prunes chunks. Adding +5 days
+  -- Filter on `ts` directly so Postgres prunes by date. Adding +5 days
   -- to the lookback acts as a buffer for weekends/holidays.
   WHERE ts >= NOW() - INTERVAL '{lookback_days_plus_5} days'
 ),

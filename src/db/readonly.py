@@ -171,8 +171,8 @@ def execute_safe(
     """
     Execute already-validated SQL on the read-only role.
 
-    Default 15s timeout fits Timescale Cloud round-trip + analytical query
-    headroom (e.g. NASDAQ-100 7-day return ~4.5s on cloud free tier);
+    Default 15s timeout fits a hosted-Postgres round-trip + analytical query
+    headroom (e.g. a cold start on a scale-to-zero free tier);
     local Postgres queries that finish in <100ms are unaffected by the
     higher ceiling.
 

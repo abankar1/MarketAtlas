@@ -1,206 +1,141 @@
 # Deployment runbook
 
-Hosting setup: **Streamlit Community Cloud** (web UI) + **Timescale Cloud**
-(Postgres) + **GitHub Actions** (daily incremental updates). All on free
-tiers; expect $0–25/month depending on DB row count.
+Hosting setup: **Streamlit Community Cloud** (web UI) + **Neon** (Postgres)
++ **GitHub Actions** (daily price updates). Streamlit Cloud and Neon are
+free; the paid pieces are the Marketstack Basic plan and Anthropic API usage.
 
-This runbook covers the one-time steps to go from a local dev setup to a
-public HTTPS URL serving the dashboard. Follow the phases in order.
+Follow the phases in order for a fresh deployment.
 
 ---
 
-## Phase 1 — Timescale Cloud setup
+## Phase 1 — Neon database
 
-1. Sign up at <https://console.cloud.timescale.com/>. The free tier (no
-   credit card) gives a 30-day trial; after that the smallest paid tier is
-   $25/month. The DB is large enough for 20+ years of S&P 500 / NASDAQ-100 /
-   Dow 30 daily bars.
+1. Sign up at <https://neon.com> and create a project on the **Free** plan
+   (1 GB storage per project, 100 compute-hours a month). The full 10-year
+   dataset is about 365 MB.
 
-2. Create a new service:
-   - Name: `market-atlas`
-   - Cloud / region: pick whichever is closest to where you and your viewers
-     are (latency only — the daily job is async).
-   - Postgres major version: 16+ recommended.
-   - Enable **TimescaleDB extension** (default).
-
-3. Copy the **connection string** for the default `tsdbadmin` user. Keep it
-   somewhere safe — you'll paste it into both Streamlit Cloud and GitHub
-   Secrets later. It looks like:
+2. Copy the **direct** connection string (host *without* `-pooler`). The
+   pooled endpoint rejects the `statement_timeout` startup option the Ask AI
+   tab sets, so the app must use the direct one. It looks like:
    ```
-   postgresql://tsdbadmin:PASSWORD@HOST.tsdb.cloud.timescale.com:PORT/tsdb?sslmode=require
+   postgresql://neondb_owner:PASSWORD@ep-xxxx.REGION.aws.neon.tech/neondb?sslmode=require&channel_binding=require
    ```
 
-4. Open the **SQL editor** in the Timescale console (or `psql`). Create a
-   read-only role for the Ask AI tab:
-   ```sql
-   CREATE ROLE atlas_reader LOGIN PASSWORD 'PICK-A-STRONG-PASSWORD';
-   GRANT CONNECT ON DATABASE tsdb TO atlas_reader;
-   GRANT USAGE ON SCHEMA public TO atlas_reader;
-   GRANT SELECT ON ALL TABLES IN SCHEMA public TO atlas_reader;
-   ALTER DEFAULT PRIVILEGES IN SCHEMA public
-     GRANT SELECT ON TABLES TO atlas_reader;
-   ```
-   The Ask AI tab uses this role's credentials so LLM-generated SQL cannot
-   write or drop anything.
+3. Open the Neon **SQL Editor** (or `psql`) and run the table and
+   `atlas_reader` SQL from [database-setup.md](database-setup.md).
 
-5. Build the readonly connection string by swapping in `atlas_reader` and
+4. Build the read-only connection string by swapping in `atlas_reader` and
    its password. Keep both strings handy.
 
+The compute scales to zero after 5 idle minutes, so the first page load
+after a quiet spell takes a moment longer.
+
 ---
 
-## Phase 2 — Migrate data from local Postgres → Timescale Cloud
+## Phase 2 — Load data
 
-Use `pg_dump` from your local machine and restore directly into the cloud
-service. Timescale provides `timescaledb_pre_restore()` /
-`timescaledb_post_restore()` helpers that make this painless.
+Either start fresh or copy an existing database.
 
-> **Time estimate:** 2–10 minutes for a typical 10-year backfill of ~700
-> symbols. Run from a machine with a stable connection.
-
+**Fresh:** point `src/config/configuration.json` at the new `db_url`, then:
 ```bash
-# 1. Dump local DB. Use --no-owner / --no-privileges so role grants from
-#    your local DB don't conflict with the cloud service.
-pg_dump \
-  --format=plain \
-  --no-owner \
-  --no-privileges \
-  --no-tablespaces \
-  --quote-all-identifiers \
-  --file=market_atlas.sql \
-  "postgresql://localhost:5432/your_local_db_name"
-
-# 2. On the cloud DB, prepare TimescaleDB for a restore. This temporarily
-#    disables background workers + triggers that would otherwise interfere.
-psql "$CLOUD_DB_URL" -c "SELECT timescaledb_pre_restore();"
-
-# 3. Restore.
-psql "$CLOUD_DB_URL" -f market_atlas.sql
-
-# 4. Re-enable Timescale background work.
-psql "$CLOUD_DB_URL" -c "SELECT timescaledb_post_restore();"
+python -m src.sync_constituents      # index membership from Wikipedia
+python -m src.load_sectors           # GICS sectors from data/gics_sectors.json
+python -m src.backfill.backfill_10y  # historical bars (one-time, ~1 request/symbol)
 ```
 
-Verify the restore:
+**Copy from another Postgres** (tables already created in Phase 1):
 ```bash
-psql "$CLOUD_DB_URL" <<'SQL'
-SELECT 'assets' AS table, COUNT(*) FROM assets
-UNION ALL SELECT 'daily_bars', COUNT(*) FROM daily_bars
-UNION ALL SELECT 'sp500_constituents', COUNT(*) FROM sp500_constituents
-UNION ALL SELECT 'nasdaq100_constituents', COUNT(*) FROM nasdaq100_constituents
-UNION ALL SELECT 'dow30_constituents', COUNT(*) FROM dow30_constituents;
-
--- Confirm daily_bars is still a hypertable on the cloud side.
-SELECT hypertable_name FROM timescaledb_information.hypertables;
-SQL
+pg_dump --data-only --no-owner --no-privileges \
+  --table='public.*' "$OLD_DB_URL" | psql "$NEW_DB_URL"
 ```
 
-If anything looks wrong, you can wipe and redo: drop the schema in the
-Timescale console and re-run Phase 2.
+Verify with the row-count query in [database-setup.md](database-setup.md).
 
 ---
 
-## Phase 3 — GitHub setup
+## Phase 3 — GitHub Actions
 
-1. Push the merged `main` to GitHub if you haven't already:
-   ```bash
-   git checkout main
-   git merge GenAILayer
-   git push origin main
-   ```
+In the GitHub repo (`abankar1/MarketAtlas`) → **Settings → Secrets and
+variables → Actions**, add:
 
-2. In the GitHub repo (`abankar1/MarketAtlas`) → **Settings → Secrets and
-   variables → Actions → New repository secret**, add:
+| Secret name         | Value                                                     |
+| ------------------- | --------------------------------------------------------- |
+| `DB_URL`            | Read-write (direct) Neon connection string                |
+| `MARKETDATA_TOKEN`  | Marketstack API key                                       |
+| `ANTHROPIC_API_KEY` | Anthropic API key (sector classifier for new symbols)     |
+| `MARKETAUX_TOKEN`   | Marketaux API key (optional; kept so one set covers both) |
 
-   | Secret name          | Value                                                    |
-   | -------------------- | -------------------------------------------------------- |
-   | `DB_URL`             | Read-write Timescale Cloud connection string             |
-   | `MARKETDATA_TOKEN`   | Marketstack API key                                      |
-   | `DAYS`               | `1000` (or your preferred lookback window)               |
-   | `API_SLEEP_SECONDS`  | `0.2`                                                    |
-   | `ANTHROPIC_API_KEY`  | Anthropic API key (only for the daily sector-classifier) |
-   | `ANTHROPIC_MODEL`    | e.g. `claude-haiku-4-5` (optional, has a default)        |
-   | `MARKETAUX_TOKEN`    | Marketaux API key (not used by the daily job, but kept here so the same secrets cover both) |
+`DB_URL_READONLY` is not needed here — only the dashboard uses it.
 
-   `DB_URL_READONLY` is **not** needed by GitHub Actions — only the
-   dashboard reads from it.
+`.github/workflows/daily-update.yml` runs from `main` Tuesday–Saturday at
+09:00 UTC, picking up each weekday's close. Symbols are fetched 100 per
+Marketstack request, so a run costs about 6 requests (~130 a month). That is
+over the Marketstack free plan's 100, so use the **Basic** plan (10,000 a month).
 
-3. Confirm the workflow runs. Push the change, then go to **Actions →
-   Daily market data update → Run workflow**. If the run is green, the
-   schedule will take over from there (`30 22 * * 1-5`).
+To test it: **Actions → Daily market data update → Run workflow**.
 
 ---
 
-## Phase 4 — Streamlit Community Cloud deployment
+## Phase 4 — Streamlit Community Cloud
 
-1. Sign in at <https://share.streamlit.io/> with your GitHub account and
-   authorize access to `abankar1/MarketAtlas`.
-
-2. **Create app**:
+1. Sign in at <https://share.streamlit.io/> with GitHub and create an app:
    - Repository: `abankar1/MarketAtlas`
-   - Branch: `main`
+   - Branch: `release`
    - Main file path: `src/dashboard/app.py`
-   - App URL: pick a subdomain like `market-atlas.streamlit.app`
-   - Python version: **3.12** (matches the GHA workflow)
-   - Click **Advanced settings → Secrets** and paste the contents of
-     `.streamlit/secrets.toml.example` with your real values. Required
-     keys at minimum:
-     ```toml
-     db_url = "postgresql://tsdbadmin:...@HOST.tsdb.cloud.timescale.com:PORT/tsdb?sslmode=require"
-     marketdata_token = "..."
-     anthropic_api_key = "sk-ant-..."
-     db_url_readonly = "postgresql://atlas_reader:...@HOST..."
-     marketaux_token = "..."
-     ```
+   - Python version: **3.12** (matches the workflow)
 
-3. Click **Deploy**. First boot installs `requirements.txt` (~2 min). The
-   app should come up at your chosen URL.
+2. **Advanced settings → Secrets**: paste `.streamlit/secrets.toml.example`
+   with real values. At minimum:
+   ```toml
+   db_url = "postgresql://neondb_owner:...@ep-xxxx.REGION.aws.neon.tech/neondb?sslmode=require"
+   db_url_readonly = "postgresql://atlas_reader:...@ep-xxxx.REGION.aws.neon.tech/neondb?sslmode=require"
+   marketdata_token = "..."
+   anthropic_api_key = "sk-ant-..."
+   marketaux_token = "..."
+   ```
+   Keys go at the top level (or all under one `[market_atlas]` table), with
+   straight quotes.
 
-4. **Smoke test:**
-   - Heatmap tab loads with treemap + Top 5 movers.
-   - Stock Detail tab loads OHLCV chart for any symbol.
-   - News tab loads headlines (proves Marketaux key works).
-   - Ask AI tab answers a basic question like "top gainer last week"
-     (proves Anthropic key + readonly DB work).
+3. **Deploy**, then smoke test:
+   - Heatmap loads with the Top 5 movers and the "Prices as of …" line.
+   - Stock Detail draws a chart; News shows headlines.
+   - Ask AI answers "top gainer last week".
 
 ---
 
 ## Phase 5 — Day-2 operations
 
-- **Updating the deployed app** — every push to `main` triggers a Streamlit
-  Cloud rebuild automatically. Monitor the build log via the app's "Manage
-  app" view.
-- **Rotating secrets** — Timescale rotates passwords from the console;
-  update the secret in *both* GitHub Actions and Streamlit Cloud after
-  each rotation.
-- **Watching the daily job** — GitHub → Actions → "Daily market data
-  update" shows green/red runs on a calendar. Failed runs email you by
-  default.
-- **Cost watch** — Timescale Cloud monthly invoice + Anthropic usage are
-  the only paid services. Marketstack and Marketaux are on free tiers
-  (rate-limited). Monitor `daily_bars` row count vs. your Timescale plan
-  limit.
+- **Releasing** — work lands on `main` through PRs; the app deploys from
+  `release`, so merge `main` → `release` to ship. Streamlit Cloud rebuilds
+  on every push to `release`.
+- **Rotating secrets** — reset passwords in the Neon console (Roles), then
+  update both GitHub Actions and Streamlit Cloud.
+- **Watching the daily job** — GitHub → Actions → "Daily market data update".
+  Each run logs its Marketstack request count and how many symbols are
+  current. A run fails only if the batched update fails.
+- **Cost watch** — Neon usage page (storage and compute-hours), the
+  Marketstack dashboard (requests), and Anthropic usage.
 
 ---
 
 ## Troubleshooting
 
+**"Missing database configuration" on Streamlit Cloud**
+The secrets TOML didn't parse, so no `db_url` was found. Look for curly
+quotes, duplicate keys, or keys accidentally placed under a section header.
+
+**"unsupported startup parameter in options: statement_timeout"**
+`db_url_readonly` points at the pooled (`-pooler`) host. Use the direct one.
+
 **Dashboard boots but every query says "no data"**
-The `db_url` secret points at an empty DB. Re-run Phase 2 (data migration).
+`db_url` points at an empty database. Re-run Phase 2.
 
-**"Missing required config key: db_url" on Streamlit Cloud**
-The secrets TOML wasn't parsed. Check the formatting — keys must be at the
-top level OR inside a `[market_atlas]` table.
+**Ask AI returns "permission denied for table …"**
+`atlas_reader` is missing SELECT. Re-run the GRANT statements from
+[database-setup.md](database-setup.md); the `ALTER DEFAULT PRIVILEGES` line
+covers tables created later.
 
-**GitHub Actions run fails on `import anthropic`**
-`ANTHROPIC_API_KEY` is set, so the daily job tries to import the SDK.
-Confirm `anthropic>=0.40.0` is in `requirements.txt`.
-
-**Ask AI tab returns "permission denied for table assets"**
-The readonly role doesn't have SELECT. Re-run the GRANT statements in
-Phase 1 — note that GRANTs only apply to *existing* tables; the `ALTER
-DEFAULT PRIVILEGES` line ensures future tables work too.
-
-**Streamlit Cloud rebuilds take >5 min**
-Add `psycopg[binary]` (already in `requirements.txt`) to avoid compiling
-psycopg from source on every rebuild. If still slow, pin specific versions
-to leverage the wheel cache.
+**A new index member has no prices**
+Marketstack sometimes lists a renamed or newly listed ticker a few days late
+(it returns 422). The daily job retries it every run and picks it up once
+Marketstack has it.

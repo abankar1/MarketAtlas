@@ -10,7 +10,7 @@ caching, and known behavioral constraints.
 
 **Type:** Streamlit dashboard + Python data pipeline + Anthropic LLM-backed Ask AI tab  
 **Purpose:** Track and visualize price performance of S&P 500, NASDAQ-100, and Dow 30 constituents; answer natural-language questions about historical price/volume.  
-**Stack:** Python 3.12 (cloud) / 3.14 (local), Streamlit, TimescaleDB (PostgreSQL on Tigerdata Cloud), psycopg3, Plotly, Pandas, Marketstack API, Anthropic API.  
+**Stack:** Python 3.12 (cloud) / 3.14 (local), Streamlit, PostgreSQL (hosted on Neon), psycopg3, Plotly, Pandas, Marketstack API, Anthropic API.  
 **Hosting:** Streamlit Community Cloud serves the dashboard from the `release` branch; GitHub Actions runs the daily-update job (cron in `.github/workflows/daily-update.yml`) from `main`.  
 **Working directory:** repo root (all `python -m` commands run from here)
 
@@ -65,8 +65,8 @@ repo root/
 │   └── gics_sectors.json               # static {symbol: gics_sector} map (532 symbols)
 ├── docs/
 │   ├── user-guide.md                   # End-user dashboard guide
-│   ├── deployment.md                   # Streamlit Cloud + Tigerdata Cloud + GHA runbook
-│   └── timescaledb-cheatsheet.md       # TimescaleDB SQL reference
+│   ├── deployment.md                   # Streamlit Cloud + Neon + GHA runbook
+│   └── database-setup.md               # Table + read-only role SQL
 ├── tests/
 │   ├── test_ai_cache.py                # Cache key + TTL tests
 │   ├── test_intent_router.py           # Routing + parsing tests
@@ -149,7 +149,7 @@ Primary metadata table. One row per symbol.
 | updated_at      | TIMESTAMPTZ |                                    |
 
 ### `public.daily_bars`
-TimescaleDB hypertable. One row per symbol per trading day.
+Time-series table, indexed on `ts`. One row per symbol per trading day.
 
 | Column      | Type        | Notes                   |
 |-------------|-------------|-------------------------|
@@ -294,7 +294,7 @@ The dashboard is split into one entry-point module and several supporting module
 | `charts.py` | `build_fig` (treemap), `build_detail_fig` (multi-panel candlestick), `build_compare_fig` (multi-symbol rebased) |
 | `indicators.py` | Pure-pandas indicator computations — no Streamlit or DB dependencies |
 | `prefs.py` | `load_prefs` / `save_prefs` for `~/.marketatlas/prefs.json` (sidebar defaults survive browser restarts) |
-| `heatmap.py` | `render_heatmap_tab` — KPI row, top-5 movers strip (▲/▼), treemap/table toggle, CSV export |
+| `heatmap.py` | `render_heatmap_tab` — Options row (time-range dropdown + sector filter), top-5 movers strip (▲/▼), Finviz-style treemap. Palette selector and ranked-table view are hidden but kept in code. |
 | `sector_synopsis.py` | `render_sector_synopsis_tab` (entry point) + `render_sector_synopsis` (`@st.fragment`) |
 | `stock_detail.py` | `render_stock_detail` (`@st.fragment`) — symbol picker, index membership badges, candlestick chart, OHLCV CSV export, Compare-mode multi-symbol chart |
 | `index_overlap.py` | `render_index_overlap_tab` — present in code but **hidden** from the tab strip (still renderable if the tab is re-added to `_TABS`) |
@@ -325,8 +325,10 @@ _TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
 | Function | Signature | Purpose |
 |----------|-----------|---------|
 | `load_config` | `() -> dict` | Delegates to `src.config.settings.load_settings()` (st.secrets / env vars / JSON file). Returns `{}` on missing config so caller can show a friendly error. |
-| `_preset_dates` | `(key: str) -> (date, date)` | Compute (date_from, date_to) for a preset key |
-| `_on_preset_click` | `(label, min_day, end_max_day) -> None` | `on_click` callback for preset buttons; updates session_state before rerun |
+| `_preset_dates` | `(key: str, prev_day=None) -> (date, date)` | Compute (date_from, date_to) for a preset key. `"24H"` starts at `prev_day` (previous trading day, from `fetch_previous_trading_day`) so the range spans two closes |
+| `_on_preset_click` | `(label, min_day, end_max_day, prev_day=None) -> None` | `on_click` callback for preset buttons; updates session_state before rerun |
+| `_render_range_select` | `(min_day, end_max_day, prev_day) -> None` | Heatmap time-range dropdown (`_RANGE_CHOICES`). Re-synced from `active_preset` before render, so sidebar buttons and the dropdown always agree |
+| `_custom_range_dialog` | `(min_day, end_max_day) -> None` | `@st.dialog` range calendar for **Custom**. Stores `_pending_range`; `main` applies it before the sidebar `date_from`/`date_to` widgets render |
 | `_on_tab_click` | `(tab_name: str, db_url: str = "") -> None` | `on_click` callback for tab nav buttons; sets active_tab AND fires `log_usage_event(..., 'tab_change', ...)` (fire-and-forget on a daemon thread) |
 | `main` | `() -> None` | Streamlit entry point. Generates `_session_id` (UUID) once per session. Logs `session_load` (with `to_tab='Heatmap'`) once per session, gated by `_app_load_persisted`. |
 
@@ -378,7 +380,7 @@ All functions are pure pandas — no Streamlit or DB imports.
 | `render_ranked_table` | `(df, color_range) -> None` | Renders sortable table of all stocks by return % with RdYlGn coloring |
 | `_build_export_csv` | `(df) -> bytes` | Builds in-memory CSV: symbol, name, sector, return_pct, dollar_volume, percentile_rank |
 | `_exceeds_three_months` | `(d_from, d_to) -> bool` | Calendar-month guard — True if span is strictly > 3 months |
-| `render_heatmap_tab` | `(df, color_range, range_label, index_key, date_from, date_to) -> None` | Full Heatmap tab: KPI row, treemap/table toggle, CSV export button |
+| `render_heatmap_tab` | `(df, index_key, date_from, date_to, size_by, range_picker=None) -> None` | Full Heatmap tab: Options row (`range_picker` callable from app.py + sector filter), movers strip, treemap |
 
 CSV export is disabled (`disabled=True`, empty data) when the date range exceeds 3 calendar months.
 
@@ -587,7 +589,7 @@ Fragment parameters are passed by the full-page render and are frozen for the li
 
 17. **The Ask AI tab caches LLM decisions, never DB results.** Three LRU+TTL caches in `src/ai/cache.py` (route, ai_sql, narrate). Keys fold `PROMPT_VERSION` so a one-character bump invalidates every stale entry on the next deploy — far more robust than manual cache clears. Templates re-execute against current DB state every time. Errors are not cached.
 
-18. **Filter `daily_bars.ts` directly — never wrap it in a function inside WHERE.** TimescaleDB chunk pruning only kicks in when the partition column appears unwrapped in the WHERE clause. `WHERE (ts AT TIME ZONE 'UTC')::date >= …` disables pruning and turns a 90ms query into a 5+ second full-hypertable scan. Use `WHERE ts >= NOW() - INTERVAL '30 days'` instead. The schema docstring in `nl_to_sql.py` calls this out for the LLM as well.
+18. **Filter `daily_bars.ts` directly — never wrap it in a function inside WHERE.** Postgres can only prune by date when `ts` appears unwrapped in the WHERE clause. `WHERE (ts AT TIME ZONE 'UTC')::date >= …` disables pruning and turns a 90ms query into a 5+ second full-table scan. Use `WHERE ts >= NOW() - INTERVAL '30 days'` instead. The schema docstring in `nl_to_sql.py` calls this out for the LLM as well.
 
 19. **Hide Streamlit's "Ask Google" / "Ask ChatGPT" helper anchors.** Streamlit 1.31+ injects them next to `st.error` / `st.exception` widgets. They surface internal SQL/error text to third-party AI tools. Global CSS in `app.py` hides any anchor with `href*="google.com/search"`, `chatgpt.com/?q="`, or `chat.openai.com/?q="`. The native "Copy" button is preserved.
 
