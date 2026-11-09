@@ -45,6 +45,7 @@ from src.dashboard.data import (  # noqa: E402
     _get_ohlcv_cache,
     _get_session_cache,
     fetch_available_date_bounds,
+    fetch_previous_trading_day,
     get_treemap_data_cached,
 )
 from src.dashboard.heatmap import render_heatmap_tab  # noqa: E402
@@ -94,13 +95,32 @@ _SIZE_BY_OPTIONS: dict[str, str] = {
     "Magnitude":     "magnitude",
 }
 
-# label → (days_back | None = YTD, display label)
-_DATE_PRESETS: dict[str, tuple[int | None, str]] = {
+# label → (days_back | None = YTD | "prev" = previous trading day, display label)
+_DATE_PRESETS: dict[str, tuple[int | str | None, str]] = {
+    "24H": ("prev", "Last trading day"),
+    "1W":  (7,    "Past week"),
+    "1M":  (30,   "Past month"),
     "3M":  (90,   "Past 3 months"),
     "6M":  (182,  "Past 6 months"),
     "1Y":  (365,  "Past 1 year"),
     "2Y":  (730,  "Past 2 years"),
     "YTD": (None, "YTD"),
+}
+_DEFAULT_PRESET = "1W"
+
+# Sidebar quick-range buttons (the sidebar fits six).
+_SIDEBAR_PRESETS = ("1W", "3M", "6M", "1Y", "2Y", "YTD")
+
+# Heatmap time-range dropdown: label → preset key (None = custom dates).
+_CUSTOM_RANGE = "Custom"
+_RANGE_CHOICES: dict[str, str | None] = {
+    "24 hours":   "24H",
+    "1 week":     "1W",
+    "1 month":    "1M",
+    "3 months":   "3M",
+    "6 months":   "6M",
+    "1 year":     "1Y",
+    _CUSTOM_RANGE: None,
 }
 
 
@@ -108,15 +128,22 @@ _DATE_PRESETS: dict[str, tuple[int | None, str]] = {
 # Callbacks (module-level so Streamlit can reference them stably)
 # ---------------------------------------------------------------------------
 
-def _preset_dates(key: str) -> tuple[dt.date, dt.date]:
-    """Compute (date_from, date_to) for a preset key, anchored to today."""
+def _preset_dates(
+    key: str, prev_day: dt.date | None = None
+) -> tuple[dt.date, dt.date]:
+    """
+    Compute (date_from, date_to) for a preset key, anchored to today.
+    "24H" starts at `prev_day` (the previous trading day's close) so the
+    range spans exactly two closes; callers clamp date_to to the data.
+    """
     today = dt.date.today()
     days_back, _ = _DATE_PRESETS[key]
-    d_from = (
-        dt.date(today.year, 1, 1)
-        if days_back is None
-        else today - dt.timedelta(days=days_back)
-    )
+    if days_back == "prev":
+        d_from = prev_day or today - dt.timedelta(days=1)
+    elif days_back is None:
+        d_from = dt.date(today.year, 1, 1)
+    else:
+        d_from = today - dt.timedelta(days=days_back)
     return d_from, today
 
 
@@ -140,15 +167,91 @@ def _freshness_label(latest: dt.date, today: dt.date | None = None) -> str:
     return f"Prices as of {latest:%a, %b} {latest.day}, {latest.year} close · {rel}"
 
 
-def _on_preset_click(label: str, min_day: dt.date, end_max_day: dt.date) -> None:
+def _on_preset_click(
+    label: str,
+    min_day: dt.date,
+    end_max_day: dt.date,
+    prev_day: dt.date | None = None,
+) -> None:
     """
     on_click callback for quick-range preset buttons.
     Runs before the rerun so the active button highlights on the first click.
     """
-    d_from, d_to = _preset_dates(label)
+    d_from, d_to = _preset_dates(label, prev_day)
     st.session_state["active_preset"] = label
     st.session_state["date_from"] = max(min_day, min(d_from, end_max_day))
     st.session_state["date_to"]   = max(min_day, min(d_to,   end_max_day))
+
+
+def _on_range_choice(
+    min_day: dt.date, end_max_day: dt.date, prev_day: dt.date | None
+) -> None:
+    """on_change for the Heatmap time-range dropdown."""
+    preset = _RANGE_CHOICES.get(st.session_state.get("range_choice"))
+    if preset is None:
+        # Custom: open the start/end dialog on this rerun. Dates (and the
+        # dropdown, which is re-synced from active_preset) only change
+        # once the dialog is applied.
+        st.session_state["_open_custom_range"] = True
+    else:
+        _on_preset_click(preset, min_day, end_max_day, prev_day)
+
+
+def _range_choice_label(choice: str) -> str:
+    """Show the applied dates next to "Custom" in the dropdown."""
+    preset_keys = {k for k in _RANGE_CHOICES.values() if k}
+    if choice == _CUSTOM_RANGE and st.session_state.get("active_preset") not in preset_keys:
+        d_from = st.session_state.get("date_from")
+        d_to = st.session_state.get("date_to")
+        if isinstance(d_from, dt.date) and isinstance(d_to, dt.date):
+            return f"Custom: {d_from:%b} {d_from.day} – {d_to:%b} {d_to.day}, {d_to.year}"
+    return choice
+
+
+def _render_range_select(
+    min_day: dt.date, end_max_day: dt.date, prev_day: dt.date | None
+) -> None:
+    """Time-range dropdown shown in the Heatmap Options row."""
+    # Keep the dropdown in step with the active range, however it was set
+    # (sidebar button, date pickers, dialog). Safe here: the widget hasn't
+    # been created yet on this run.
+    active = st.session_state.get("active_preset")
+    st.session_state["range_choice"] = next(
+        (lbl for lbl, key in _RANGE_CHOICES.items() if key == active and key),
+        _CUSTOM_RANGE,
+    )
+    st.selectbox(
+        "Time range",
+        list(_RANGE_CHOICES),
+        key="range_choice",
+        format_func=_range_choice_label,
+        label_visibility="collapsed",
+        on_change=_on_range_choice,
+        kwargs={"min_day": min_day, "end_max_day": end_max_day, "prev_day": prev_day},
+    )
+
+
+@st.dialog("Custom range")
+def _custom_range_dialog(min_day: dt.date, end_max_day: dt.date) -> None:
+    """Pick a start date, then an end date; the range applies on the second click."""
+    cur = (
+        st.session_state.get("date_from", min_day),
+        st.session_state.get("date_to", end_max_day),
+    )
+    st.caption("Pick a start date, then an end date.")
+    picked = st.date_input(
+        "Date range",
+        value=cur,
+        min_value=min_day,
+        max_value=end_max_day,
+        label_visibility="collapsed",
+    )
+    if isinstance(picked, (tuple, list)) and len(picked) == 2 and tuple(picked) != cur:
+        # Applied at the top of the next run, before the sidebar date
+        # widgets (same session_state keys) are created. The full rerun
+        # also closes the dialog.
+        st.session_state["_pending_range"] = (picked[0], picked[1])
+        st.rerun()
 
 
 def _get_session_device() -> tuple[str | None, bool | None]:
@@ -252,8 +355,10 @@ def _seed_prefs_once() -> None:
     if p.get("size_by") in _VALID_SIZE_BY_LABELS:
         st.session_state.setdefault("treemap_size_by", p["size_by"])
 
-    if p.get("default_preset") in _VALID_PRESET_LABELS:
-        st.session_state.setdefault("active_preset", p["default_preset"])
+    # The date range is deliberately NOT restored from prefs: on a hosted
+    # deployment prefs.json lives on the shared server, so restoring it
+    # would make the last visitor's range everyone's default. Every new
+    # session starts on _DEFAULT_PRESET instead.
 
     if p.get("palette") in _VALID_PALETTE_LABELS:
         st.session_state.setdefault("color_palette", p["palette"])
@@ -504,9 +609,9 @@ def main() -> None:
             text-overflow: ellipsis !important;
           }
 
-          /* Heatmap Options expander: keep the 3 controls (View / Sectors /
-             Palette) on one line at mobile width. Labels are short enough
-             ("Map" / "Table", "Finviz", etc.) to fit in ~33% slots. */
+          /* Heatmap Options expander: keep the controls (Time range /
+             Sectors) on one line at mobile width. The radio/palette rules
+             below only apply if those hidden controls are restored. */
           [data-testid="stElementContainer"]:has(div[data-options-row="true"])
             + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
             flex-wrap: nowrap !important;
@@ -749,23 +854,35 @@ def main() -> None:
 
     end_max_day = max(min_day, max_day)
     freshness_slot.caption(_freshness_label(max_day))
+    prev_day = fetch_previous_trading_day(db_url, max_day)
 
     # -----------------------------------------------------------------------
     # Sidebar — quick-range preset buttons
     # -----------------------------------------------------------------------
     if "active_preset" not in st.session_state:
-        st.session_state["active_preset"] = "3M"
+        st.session_state["active_preset"] = _DEFAULT_PRESET
+
+    # Dates applied from the Custom range dialog on the previous run.
+    _pending = st.session_state.pop("_pending_range", None)
+    if _pending:
+        st.session_state["active_preset"] = None
+        st.session_state["date_from"], st.session_state["date_to"] = _pending
 
     st.sidebar.subheader("Quick range")
-    btn_cols = st.sidebar.columns(len(_DATE_PRESETS))
-    for col, label in zip(btn_cols, _DATE_PRESETS):
+    btn_cols = st.sidebar.columns(len(_SIDEBAR_PRESETS))
+    for col, label in zip(btn_cols, _SIDEBAR_PRESETS):
         col.button(
             label,
             key=f"preset_btn_{label}",
             type="primary" if st.session_state["active_preset"] == label else "secondary",
             use_container_width=True,
             on_click=_on_preset_click,
-            kwargs={"label": label, "min_day": min_day, "end_max_day": end_max_day},
+            kwargs={
+                "label": label,
+                "min_day": min_day,
+                "end_max_day": end_max_day,
+                "prev_day": prev_day,
+            },
         )
 
     # -----------------------------------------------------------------------
@@ -774,7 +891,7 @@ def main() -> None:
 
     # Seed on first load
     if not isinstance(st.session_state.get("date_from"), dt.date):
-        d_from, d_to = _preset_dates(st.session_state["active_preset"])
+        d_from, d_to = _preset_dates(st.session_state["active_preset"], prev_day)
         st.session_state["date_from"] = max(min_day, min(d_from, end_max_day))
         st.session_state["date_to"]   = max(min_day, min(d_to,   end_max_day))
 
@@ -809,7 +926,7 @@ def main() -> None:
     # the user must have overridden them manually.
     _active_preset = st.session_state.get("active_preset")
     if _active_preset and _active_preset in _DATE_PRESETS:
-        _exp_from, _exp_to = _preset_dates(_active_preset)
+        _exp_from, _exp_to = _preset_dates(_active_preset, prev_day)
         _exp_from = max(min_day, min(_exp_from, end_max_day))
         _exp_to   = max(min_day, min(_exp_to,   end_max_day))
         if date_from != _exp_from or date_to != _exp_to:
@@ -988,7 +1105,12 @@ def main() -> None:
     _active_tab = st.session_state["active_tab"]
 
     if _active_tab == "Heatmap":
-        render_heatmap_tab(df, index_key, date_from, date_to, size_by=size_by)
+        render_heatmap_tab(
+            df, index_key, date_from, date_to, size_by=size_by,
+            range_picker=lambda: _render_range_select(min_day, end_max_day, prev_day),
+        )
+        if st.session_state.pop("_open_custom_range", False):
+            _custom_range_dialog(min_day, end_max_day)
 
     elif _active_tab == "Sector Synopsis":
         render_sector_synopsis_tab(df, range_label, db_url, date_from, date_to)
@@ -1015,7 +1137,7 @@ def main() -> None:
         "palette":        st.session_state.get("color_palette",    "Finviz-style (default)"),
         "size_by":        st.session_state.get("treemap_size_by",  "Dollar volume"),
         "indicators":     st.session_state.get("detail_indicators", ["SMA 20", "SMA 50"]),
-        "default_preset": st.session_state.get("active_preset",    "3M"),
+        "default_preset": st.session_state.get("active_preset",    _DEFAULT_PRESET),
     })
 
 

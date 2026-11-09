@@ -228,7 +228,7 @@ A managed deployment stack is documented in [docs/deployment.md](docs/deployment
 
 Five tabs, all driven by the same sidebar filters:
 
-- **Heatmap** — treemap tiles sized by dollar volume, colored by **percentile rank** of return % within the visible universe (Worst / Median / Best); collapsible Options panel (View toggle, sector filter, palette); top-5 movers strip (▲/▼); sector parents show dollar-volume-weighted return + avg start/end close on hover
+- **Heatmap** — treemap tiles sized by dollar volume, colored by **percentile rank** of return % within the visible universe (Worst / Median / Best); collapsible Options panel (time range — 24 hours / 1 week (default) / 1 month / 3 months / 6 months / 1 year / Custom calendar — and sector filter); Finviz-style palette; top-5 movers strip (▲/▼); sector parents show dollar-volume-weighted return + avg start/end close on hover
 - **Ask AI** — natural-language query tab. Type a question in plain English ("Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?"). Claude first tries to route the question to one of the pre-approved SQL templates in [src/ai/query_templates.py](src/ai/query_templates.py); if no template matches, it falls back to free-form `SELECT` generation. Multi-turn memory carries the last few turns so follow-ups like "their names" or "what about volume?" resolve. Both paths run on a separate read-only Postgres role with a 15-second statement timeout and a 1,000-row cap. Every question is logged to `nl_queries`. Requires `db_url_readonly` and `anthropic_api_key` in config; see the **Ask AI tab setup** section below.
 - **Sector Synopsis** — sector breadth bar chart (click to drill in); ranked per-stock bar chart; auto-selects the top-performing sector on load
 - **Stock Detail** — full per-stock candlestick with toggleable overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI, MACD, ATR, OBV); index membership badges; Compare mode for normalized multi-symbol performance comparison (up to 5 symbols); defaults to AAPL
@@ -238,12 +238,12 @@ Five tabs, all driven by the same sidebar filters:
 
 Sidebar controls:
 - Index selector: S&P 500 | NASDAQ-100 | Dow 30 | All
-- Date range: preset buttons (3M, 6M, 1Y, 2Y, YTD) or custom date pickers
+- Date range: preset buttons (1W — the default, 3M, 6M, 1Y, 2Y, YTD) or custom date pickers
 - Cache stats: treemap, OHLCV, and news caches (all session-level with a 12-hour TTL)
 
-Color palette options (Heatmap Options panel): **Finviz-style** (default — dark red → grey → dark green), RdYlGn, RdBu (colorblind-safe), Viridis (sequential).
+The heatmap always uses the **Finviz-style** palette (dark red → grey → dark green). The other palettes (RdYlGn, RdBu, Viridis) and the ranked-table view are still in [src/dashboard/heatmap.py](src/dashboard/heatmap.py), just hidden from the UI.
 
-UI preferences (palette, index, default date preset, indicator selection) are persisted to `~/.marketatlas/prefs.json` and restored across browser sessions.
+UI preferences (index, indicator selection) are persisted to `~/.marketatlas/prefs.json` and restored across browser sessions.
 
 ---
 

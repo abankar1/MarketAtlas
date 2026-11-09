@@ -294,7 +294,7 @@ The dashboard is split into one entry-point module and several supporting module
 | `charts.py` | `build_fig` (treemap), `build_detail_fig` (multi-panel candlestick), `build_compare_fig` (multi-symbol rebased) |
 | `indicators.py` | Pure-pandas indicator computations — no Streamlit or DB dependencies |
 | `prefs.py` | `load_prefs` / `save_prefs` for `~/.marketatlas/prefs.json` (sidebar defaults survive browser restarts) |
-| `heatmap.py` | `render_heatmap_tab` — KPI row, top-5 movers strip (▲/▼), treemap/table toggle, CSV export |
+| `heatmap.py` | `render_heatmap_tab` — Options row (time-range dropdown + sector filter), top-5 movers strip (▲/▼), Finviz-style treemap. Palette selector and ranked-table view are hidden but kept in code. |
 | `sector_synopsis.py` | `render_sector_synopsis_tab` (entry point) + `render_sector_synopsis` (`@st.fragment`) |
 | `stock_detail.py` | `render_stock_detail` (`@st.fragment`) — symbol picker, index membership badges, candlestick chart, OHLCV CSV export, Compare-mode multi-symbol chart |
 | `index_overlap.py` | `render_index_overlap_tab` — present in code but **hidden** from the tab strip (still renderable if the tab is re-added to `_TABS`) |
@@ -325,8 +325,10 @@ _TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
 | Function | Signature | Purpose |
 |----------|-----------|---------|
 | `load_config` | `() -> dict` | Delegates to `src.config.settings.load_settings()` (st.secrets / env vars / JSON file). Returns `{}` on missing config so caller can show a friendly error. |
-| `_preset_dates` | `(key: str) -> (date, date)` | Compute (date_from, date_to) for a preset key |
-| `_on_preset_click` | `(label, min_day, end_max_day) -> None` | `on_click` callback for preset buttons; updates session_state before rerun |
+| `_preset_dates` | `(key: str, prev_day=None) -> (date, date)` | Compute (date_from, date_to) for a preset key. `"24H"` starts at `prev_day` (previous trading day, from `fetch_previous_trading_day`) so the range spans two closes |
+| `_on_preset_click` | `(label, min_day, end_max_day, prev_day=None) -> None` | `on_click` callback for preset buttons; updates session_state before rerun |
+| `_render_range_select` | `(min_day, end_max_day, prev_day) -> None` | Heatmap time-range dropdown (`_RANGE_CHOICES`). Re-synced from `active_preset` before render, so sidebar buttons and the dropdown always agree |
+| `_custom_range_dialog` | `(min_day, end_max_day) -> None` | `@st.dialog` range calendar for **Custom**. Stores `_pending_range`; `main` applies it before the sidebar `date_from`/`date_to` widgets render |
 | `_on_tab_click` | `(tab_name: str, db_url: str = "") -> None` | `on_click` callback for tab nav buttons; sets active_tab AND fires `log_usage_event(..., 'tab_change', ...)` (fire-and-forget on a daemon thread) |
 | `main` | `() -> None` | Streamlit entry point. Generates `_session_id` (UUID) once per session. Logs `session_load` (with `to_tab='Heatmap'`) once per session, gated by `_app_load_persisted`. |
 
@@ -378,7 +380,7 @@ All functions are pure pandas — no Streamlit or DB imports.
 | `render_ranked_table` | `(df, color_range) -> None` | Renders sortable table of all stocks by return % with RdYlGn coloring |
 | `_build_export_csv` | `(df) -> bytes` | Builds in-memory CSV: symbol, name, sector, return_pct, dollar_volume, percentile_rank |
 | `_exceeds_three_months` | `(d_from, d_to) -> bool` | Calendar-month guard — True if span is strictly > 3 months |
-| `render_heatmap_tab` | `(df, color_range, range_label, index_key, date_from, date_to) -> None` | Full Heatmap tab: KPI row, treemap/table toggle, CSV export button |
+| `render_heatmap_tab` | `(df, index_key, date_from, date_to, size_by, range_picker=None) -> None` | Full Heatmap tab: Options row (`range_picker` callable from app.py + sector filter), movers strip, treemap |
 
 CSV export is disabled (`disabled=True`, empty data) when the date range exceeds 3 calendar months.
 
