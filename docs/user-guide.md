@@ -32,35 +32,29 @@ It opens at `http://localhost:8501`.
 
 ---
 
-### Sidebar Controls
+### Filter bar
 
-**Index universe**
-Choose which index to look at: S&P 500, NASDAQ-100, Dow 30, or All (combined, deduplicated). Defaults to All.
+Two dropdowns above the tabs apply to every tab:
 
-**Quick range**
-Pick a preset time window: Past week (default), Past 3 months, Past 6 months, Past 1 year, Past 2 years, or YTD. If you manually adjust the date pickers after choosing a preset, the preset highlight clears to indicate a custom range. The Heatmap's time-range dropdown (below) changes the same range, so the two always agree.
+**Index**
+All indexes (combined, deduplicated; the default), S&P 500, NASDAQ-100, or Dow 30.
 
-**Start date / End date**
-The date pickers are bounded to the earliest and latest bar dates actually in your database for the selected universe.
+**Time range**
+24 hours (the last two closes), 1 week (the default), 1 month, 3 months, 6 months, or 1 year. **Custom…** opens a calendar: pick a start date, then an end date, and the range applies. While a custom range is active the dropdown shows its dates; choose **Custom…** again to change it. Ranges are limited to the dates in the database.
 
-**Cache**
-Shows how many query results are cached in the current session (hits, misses, slots used) for the treemap, OHLCV, and news caches. All three use a shared 12-hour TTL — long enough to keep API/DB usage low (Marketaux free tier is 100 requests/day), short enough that a dashboard left open overnight refreshes data on first use.
-
-UI preferences (index, indicator selection) are automatically saved to `~/.marketatlas/prefs.json` and restored the next time you open the dashboard.
+The header line under the title shows how fresh the prices are ("Prices as of Fri, Nov 6 close · 3 days ago").
 
 ---
 
 ### Heatmap Tab
 
-The main view. Every stock in the selected universe appears as a rectangle sized by its dollar volume. Tiles are colored by **percentile rank** of return % within the visible universe — 0 = worst performer, 100 = best — so a single outlier (e.g. a +300% mover) no longer washes everything else into the same boundary colour. The colorbar is labelled **Worst / Median / Best** rather than raw percent values.
+The main view. Every stock in the selected universe appears as a rectangle sized by its dollar volume. Tiles are colored by **percentile rank** of return % within the visible universe — worst performer red, best green — so a single outlier (e.g. a +300% mover) doesn't wash everything else into the same boundary colour. A small **Worst → Best** key sits above the treemap.
 
 **Top movers strip**
-Above the treemap, a compact strip shows the top 5 gainers (▲) and top 5 losers (▼) for a quick read on the extremes.
+Above the treemap, a compact strip shows the top 5 gainers (▲) and bottom 5 (▼) for a quick read on the extremes.
 
-**Options panel**
-Click the **Options** arrow to expand display controls:
-- *Time range* — 24 hours (the last two closes), 1 week (default), 1 month, 3 months, 6 months, 1 year, or **Custom**, which opens a calendar: pick a start date, then an end date, and the range applies. While a custom range is active the dropdown shows its dates. The range applies to every tab.
-- *Sectors* — filter to one or more GICS sectors (empty = all sectors)
+**Sectors**
+The dropdown at the top of the tab filters to one or more GICS sectors (empty = all sectors).
 
 Tiles use a Finviz-style palette (dark red → grey → dark green, no yellow).
 

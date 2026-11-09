@@ -136,13 +136,9 @@ def build_fig(
                 cmax=100.0,
                 cmid=midpoint,
                 line=dict(width=0),
-                colorbar=dict(
-                    title="Rank",
-                    len=0.85,
-                    tickmode="array",
-                    tickvals=[0, 50, 100],
-                    ticktext=["Worst", "Median", "Best"],
-                ),
+                # The Heatmap tab draws its own slim colour key; Plotly's
+                # colorbar took a third of the width on phones.
+                showscale=False,
             ),
             hovertemplate=(
                 "<b>%{label}</b><br>"
@@ -169,8 +165,14 @@ def build_fig(
 # Per-stock candlestick detail
 # ---------------------------------------------------------------------------
 
+# Calendar days of extra history to load before a chart's start date so
+# moving averages and oscillators are fully formed from the first bar shown
+# (SMA 50 needs 50 trading days ≈ 75 calendar days; MACD needs 35).
+INDICATOR_WARMUP_DAYS = 120
+
+
 def build_detail_fig(
-    df: pd.DataFrame, symbol: str, active: list[str]
+    df: pd.DataFrame, symbol: str, active: list[str], view_from=None
 ) -> go.Figure:
     """
     Build a multi-panel figure for a single stock.
@@ -188,6 +190,11 @@ def build_detail_fig(
     OBV    On-Balance Volume (volume-weighted trend)
 
     Row count and heights are computed dynamically from `active`.
+
+    view_from   Optional first date to display. Pass `df` with extra history
+                before it (INDICATOR_WARMUP_DAYS) and the indicators are
+                computed on all of it, then every trace is trimmed to start
+                at view_from.
     """
     close  = df["close"]
     dates  = df["date"]
@@ -365,7 +372,28 @@ def build_detail_fig(
     for p in sub_panels:
         fig.update_yaxes(title_text=_panel_titles[p], row=panel_row[p], col=1)
 
+    if view_from is not None:
+        _trim_to(fig, pd.to_datetime(df["date"]).to_numpy() >= np.datetime64(view_from))
+
     return fig
+
+
+def _trim_to(fig: go.Figure, keep: np.ndarray) -> None:
+    """Drop the points where `keep` is False from every per-bar trace."""
+    n = len(keep)
+    for tr in fig.data:
+        x = getattr(tr, "x", None)
+        if x is None or len(x) != n:
+            continue
+        update = {"x": np.asarray(x)[keep]}
+        for attr in ("y", "open", "high", "low", "close"):
+            val = getattr(tr, attr, None)
+            if val is not None and not isinstance(val, str) and len(val) == n:
+                update[attr] = np.asarray(val)[keep]
+        color = getattr(getattr(tr, "marker", None), "color", None)
+        if color is not None and not isinstance(color, str) and len(color) == n:
+            update["marker_color"] = np.asarray(color)[keep]
+        tr.update(update)
 
 
 # ---------------------------------------------------------------------------
