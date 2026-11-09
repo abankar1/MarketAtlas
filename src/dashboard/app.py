@@ -2,16 +2,18 @@
 Market Atlas — Streamlit dashboard entry point.
 
 Responsibilities of this file:
-  - Page config and global CSS
+  - Page config and the global stylesheet (kept small on purpose)
   - Configuration loading (db_url, etc.)
-  - Sidebar controls: index selector, date presets, date pickers, color clip, cache
-  - Top-level data fetch (treemap DataFrame shared across all views)
-  - Session-state tab navigation
+  - Header + filter bar: index universe and time range (incl. Custom dialog)
+  - Tab navigation (native st.tabs; only the open tab's code runs)
+  - Usage-event logging
 
 Each view's rendering logic lives in its own module:
   src/dashboard/heatmap.py         render_heatmap_tab
+  src/dashboard/ask.py             render_ask_tab
   src/dashboard/sector_synopsis.py render_sector_synopsis_tab
   src/dashboard/stock_detail.py    render_stock_detail
+  src/dashboard/news.py            render_news_tab
 
 Usage:
     streamlit run src/dashboard/app.py
@@ -19,7 +21,6 @@ Usage:
 from __future__ import annotations
 
 import datetime as dt
-import json
 import os
 import sys
 import uuid
@@ -27,15 +28,14 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
-# Developer-only sidebar/UI affordances are gated behind the same env var
-# that controls Streamlit's full toolbar (.streamlit/config.toml has
-# `toolbarMode = "minimal"` for end users). Launch with:
+# Developer-only UI (cache stats + clear buttons in a sidebar) is gated
+# behind the same env var that controls Streamlit's full toolbar
+# (.streamlit/config.toml has `toolbarMode = "minimal"` for end users):
 #
 #   STREAMLIT_CLIENT_TOOLBAR_MODE=developer streamlit run src/dashboard/app.py
 _DEVELOPER_MODE = os.environ.get("STREAMLIT_CLIENT_TOOLBAR_MODE") == "developer"
 
 import streamlit as st
-import streamlit.components.v1 as st_components
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -52,7 +52,6 @@ from src.dashboard.heatmap import render_heatmap_tab  # noqa: E402
 from src.dashboard.ask import render_ask_tab  # noqa: E402
 from src.dashboard.index_overlap import render_index_overlap_tab  # noqa: E402
 from src.dashboard.news import render_news_tab  # noqa: E402
-from src.dashboard.prefs import load_prefs, save_prefs  # noqa: E402
 from src.dashboard.sector_synopsis import render_sector_synopsis_tab  # noqa: E402
 from src.dashboard.stock_detail import render_stock_detail  # noqa: E402
 from src.db.repositories import log_usage_event  # noqa: E402
@@ -81,51 +80,109 @@ def load_config() -> dict:
 # Constants
 # ---------------------------------------------------------------------------
 
+# Filter-bar label → index_key. The first entry is the default.
 INDEX_OPTIONS: dict[str, str] = {
-    "S&P 500":   "sp500",
-    "NASDAQ-100": "nasdaq100",
-    "Dow 30":    "dow30",
-    "All":       "all",
+    "All indexes": "all",
+    "S&P 500":     "sp500",
+    "NASDAQ-100":  "nasdaq100",
+    "Dow 30":      "dow30",
 }
 
-# label → internal key passed to render_heatmap_tab
-_SIZE_BY_OPTIONS: dict[str, str] = {
-    "Dollar volume": "dollar_volume",
-    "Equal weight":  "equal_weight",
-    "Magnitude":     "magnitude",
-}
-
-# label → (days_back | None = YTD | "prev" = previous trading day, display label)
-_DATE_PRESETS: dict[str, tuple[int | str | None, str]] = {
-    "24H": ("prev", "Last trading day"),
-    "1W":  (7,    "Past week"),
-    "1M":  (30,   "Past month"),
-    "3M":  (90,   "Past 3 months"),
-    "6M":  (182,  "Past 6 months"),
-    "1Y":  (365,  "Past 1 year"),
-    "2Y":  (730,  "Past 2 years"),
-    "YTD": (None, "YTD"),
+# Preset key → (days back, or "prev" = previous trading day;
+#               dropdown label; heading label used by the tabs)
+_DATE_PRESETS: dict[str, tuple[int | str, str, str]] = {
+    "24H": ("prev", "24 hours", "Last trading day"),
+    "1W":  (7,      "1 week",   "Past week"),
+    "1M":  (30,     "1 month",  "Past month"),
+    "3M":  (90,     "3 months", "Past 3 months"),
+    "6M":  (182,    "6 months", "Past 6 months"),
+    "1Y":  (365,    "1 year",   "Past year"),
 }
 _DEFAULT_PRESET = "1W"
 
-# Sidebar quick-range buttons (the sidebar fits six).
-_SIDEBAR_PRESETS = ("1W", "3M", "6M", "1Y", "2Y", "YTD")
+# Time-range dropdown entries besides the presets.
+_CUSTOM_ACTIVE = "custom"      # the applied custom range, shown as its dates
+_CUSTOM_NEW = "custom-new"     # "Custom…": opens the date dialog
 
-# Heatmap time-range dropdown: label → preset key (None = custom dates).
-_CUSTOM_RANGE = "Custom"
-_RANGE_CHOICES: dict[str, str | None] = {
-    "24 hours":   "24H",
-    "1 week":     "1W",
-    "1 month":    "1M",
-    "3 months":   "3M",
-    "6 months":   "6M",
-    "1 year":     "1Y",
-    _CUSTOM_RANGE: None,
+# Index Overlap is built but hidden; add it back here to re-enable it
+# (its render branch is kept below).
+_TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
+
+_CSS = """
+<style>
+/* Streamlit adds "Ask Google" / "Ask ChatGPT" links next to errors; they
+   would send internal SQL and error text to third-party sites. */
+a[href*="google.com/search"],
+a[href*="chatgpt.com/?q="],
+a[href*="chat.openai.com/?q="] { display: none !important; }
+
+/* The chat input's character counter sits under the send button. */
+[data-testid="InputInstructions"] { display: none !important; }
+
+/* Keep the page steady while a click is processed. By default Streamlit
+   fades every element out and back in on each rerun. */
+[data-stale="true"] { opacity: 1 !important; transition: none !important; }
+
+/* Streamlit's header bar is empty here (it only shows the "running"
+   indicator), so let the page start right under the top edge. */
+.block-container { padding-top: 2rem; padding-bottom: 2rem; }
+h1 { padding-top: 0 !important; padding-bottom: 0 !important; }
+
+/* Heatmap: top movers */
+.ma-movers { display: grid; gap: 0.3rem; margin-bottom: 0.25rem; }
+.ma-movers-label { font-size: 0.75rem; opacity: 0.65; }
+.ma-movers-row {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.4rem;
 }
+.ma-card {
+  min-width: 0; border-left: 3px solid var(--c); border-radius: 6px;
+  padding: 0.3rem 0.55rem; background: rgba(127, 127, 127, 0.08);
+}
+.ma-card b {
+  display: block; font-size: 0.7rem; letter-spacing: 0.04em; opacity: 0.7;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ma-card span {
+  display: block; font-size: 0.95rem; font-weight: 700; color: var(--c);
+  white-space: nowrap;
+}
+
+/* Heatmap: colour key (replaces Plotly's colorbar, which ate a third of
+   the width on phones) */
+.ma-legend {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.75rem; opacity: 0.75;
+}
+.ma-legend i {
+  flex: 0 1 140px; height: 8px; border-radius: 4px;
+  background: linear-gradient(90deg, #a11318, #3a3f42 50%, #26a113);
+}
+
+/* Sector Synopsis: headline numbers */
+.ma-kpis {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.5rem 1.25rem;
+}
+.ma-kpis small { display: block; font-size: 0.8rem; opacity: 0.7; }
+.ma-kpis b { display: block; font-size: 1.6rem; font-weight: 400; line-height: 1.3; }
+
+@media (max-width: 640px) {
+  .block-container { padding: 1rem 0.75rem 1.5rem; }
+  h1 { font-size: 1.6rem !important; }
+  .ma-legend-note { display: none; }
+  .ma-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ma-kpis b { font-size: 1.2rem; }
+  .ma-movers-row { gap: 0.25rem; }
+  .ma-card { padding: 0.25rem 0.35rem; }
+  .ma-card b { font-size: 0.6rem; }
+  .ma-card span { font-size: 0.75rem; }
+}
+</style>
+"""
 
 
 # ---------------------------------------------------------------------------
-# Callbacks (module-level so Streamlit can reference them stably)
+# Date range helpers
 # ---------------------------------------------------------------------------
 
 def _preset_dates(
@@ -137,20 +194,23 @@ def _preset_dates(
     range spans exactly two closes; callers clamp date_to to the data.
     """
     today = dt.date.today()
-    days_back, _ = _DATE_PRESETS[key]
+    days_back = _DATE_PRESETS[key][0]
     if days_back == "prev":
-        d_from = prev_day or today - dt.timedelta(days=1)
-    elif days_back is None:
-        d_from = dt.date(today.year, 1, 1)
-    else:
-        d_from = today - dt.timedelta(days=days_back)
-    return d_from, today
+        return prev_day or today - dt.timedelta(days=1), today
+    return today - dt.timedelta(days=days_back), today
+
+
+def _fmt_span(d_from: dt.date, d_to: dt.date) -> str:
+    """'Nov 2 – Nov 6, 2026' (or with both years when they differ)."""
+    left = f"{d_from:%b} {d_from.day}"
+    if d_from.year != d_to.year:
+        left += f", {d_from.year}"
+    return f"{left} – {d_to:%b} {d_to.day}, {d_to.year}"
 
 
 def _freshness_label(latest: dt.date, today: dt.date | None = None) -> str:
     """
-    One-line data-age note for the header, e.g.
-    "Prices as of Fri, Nov 6, 2026 close · 2 days ago".
+    Data-age note for the header, e.g. "Prices as of Fri, Nov 6 close · 3 days ago".
 
     `today` defaults to the current date in US/Eastern (the market's
     timezone), so the age doesn't jump a day early on a UTC server.
@@ -164,104 +224,85 @@ def _freshness_label(latest: dt.date, today: dt.date | None = None) -> str:
         rel = "yesterday"
     else:
         rel = f"{age} days ago"
-    return f"Prices as of {latest:%a, %b} {latest.day}, {latest.year} close · {rel}"
+    return f"Prices as of {latest:%a, %b} {latest.day} close · {rel}"
 
 
-def _on_preset_click(
-    label: str,
-    min_day: dt.date,
-    end_max_day: dt.date,
-    prev_day: dt.date | None = None,
-) -> None:
-    """
-    on_click callback for quick-range preset buttons.
-    Runs before the rerun so the active button highlights on the first click.
-    """
-    d_from, d_to = _preset_dates(label, prev_day)
-    st.session_state["active_preset"] = label
-    st.session_state["date_from"] = max(min_day, min(d_from, end_max_day))
-    st.session_state["date_to"]   = max(min_day, min(d_to,   end_max_day))
-
-
-def _on_range_choice(
+def _resolve_range(
     min_day: dt.date, end_max_day: dt.date, prev_day: dt.date | None
-) -> None:
-    """on_change for the Heatmap time-range dropdown."""
-    preset = _RANGE_CHOICES.get(st.session_state.get("range_choice"))
-    if preset is None:
-        # Custom: open the start/end dialog on this rerun. Dates (and the
-        # dropdown, which is re-synced from active_preset) only change
-        # once the dialog is applied.
-        st.session_state["_open_custom_range"] = True
+) -> tuple[dt.date, dt.date, str]:
+    """Current (date_from, date_to, heading label), clamped to the data."""
+    preset = st.session_state.get("range_preset", _DEFAULT_PRESET)
+    if preset in _DATE_PRESETS:
+        d_from, d_to = _preset_dates(preset, prev_day)
+        label = _DATE_PRESETS[preset][2]
     else:
-        _on_preset_click(preset, min_day, end_max_day, prev_day)
+        d_from, d_to = st.session_state.get(
+            "custom_range", _preset_dates(_DEFAULT_PRESET)
+        )
+        label = ""
+
+    def clamp(d: dt.date) -> dt.date:
+        return max(min_day, min(d, end_max_day))
+
+    d_from, d_to = clamp(d_from), clamp(d_to)
+    return d_from, d_to, label or _fmt_span(d_from, d_to)
 
 
-def _range_choice_label(choice: str) -> str:
-    """Show the applied dates next to "Custom" in the dropdown."""
-    preset_keys = {k for k in _RANGE_CHOICES.values() if k}
-    if choice == _CUSTOM_RANGE and st.session_state.get("active_preset") not in preset_keys:
-        d_from = st.session_state.get("date_from")
-        d_to = st.session_state.get("date_to")
-        if isinstance(d_from, dt.date) and isinstance(d_to, dt.date):
-            return f"Custom: {d_from:%b} {d_from.day} – {d_to:%b} {d_to.day}, {d_to.year}"
-    return choice
+def _current_range_choice() -> str:
+    preset = st.session_state.get("range_preset", _DEFAULT_PRESET)
+    return preset if preset in _DATE_PRESETS else _CUSTOM_ACTIVE
 
 
-def _render_range_select(
-    min_day: dt.date, end_max_day: dt.date, prev_day: dt.date | None
+def _on_range_change() -> None:
+    """on_change for the time-range dropdown (runs before the rerun)."""
+    choice = st.session_state.get("range_choice")
+    if choice in _DATE_PRESETS:
+        st.session_state["range_preset"] = choice
+    elif choice == _CUSTOM_NEW:
+        st.session_state["_custom_dialog_open"] = True
+
+
+def _on_custom_dismiss() -> None:
+    """Custom dialog closed without applying: show the active range again."""
+    st.session_state["range_choice"] = _current_range_choice()
+
+
+@st.dialog("Custom range", on_dismiss=_on_custom_dismiss)
+def _custom_range_dialog(
+    min_day: dt.date, end_max_day: dt.date, current: tuple[dt.date, dt.date]
 ) -> None:
-    """Time-range dropdown shown in the Heatmap Options row."""
-    # Keep the dropdown in step with the active range, however it was set
-    # (sidebar button, date pickers, dialog). Safe here: the widget hasn't
-    # been created yet on this run.
-    active = st.session_state.get("active_preset")
-    st.session_state["range_choice"] = next(
-        (lbl for lbl, key in _RANGE_CHOICES.items() if key == active and key),
-        _CUSTOM_RANGE,
-    )
-    st.selectbox(
-        "Time range",
-        list(_RANGE_CHOICES),
-        key="range_choice",
-        format_func=_range_choice_label,
-        label_visibility="collapsed",
-        on_change=_on_range_choice,
-        kwargs={"min_day": min_day, "end_max_day": end_max_day, "prev_day": prev_day},
-    )
-
-
-@st.dialog("Custom range")
-def _custom_range_dialog(min_day: dt.date, end_max_day: dt.date) -> None:
-    """Pick a start date, then an end date; the range applies on the second click."""
-    cur = (
-        st.session_state.get("date_from", min_day),
-        st.session_state.get("date_to", end_max_day),
-    )
-    st.caption("Pick a start date, then an end date.")
+    """Pick a start date, then an end date; the range applies on the second pick."""
     picked = st.date_input(
-        "Date range",
-        value=cur,
+        "Pick a start date, then an end date",
+        value=current,
         min_value=min_day,
         max_value=end_max_day,
-        label_visibility="collapsed",
+        format="MM/DD/YYYY",
     )
-    if isinstance(picked, (tuple, list)) and len(picked) == 2 and tuple(picked) != cur:
-        # Applied at the top of the next run, before the sidebar date
-        # widgets (same session_state keys) are created. The full rerun
-        # also closes the dialog.
-        st.session_state["_pending_range"] = (picked[0], picked[1])
+    st.caption(
+        f"Prices are available from {_fmt_span(min_day, end_max_day)}."
+    )
+    if (
+        isinstance(picked, (tuple, list))
+        and len(picked) == 2
+        and tuple(picked) != tuple(current)
+    ):
+        # Plain session keys (no widget owns them), so they can be set
+        # here; the full rerun also closes the dialog.
+        st.session_state["range_preset"] = None
+        st.session_state["custom_range"] = (picked[0], picked[1])
         st.rerun()
 
+
+# ---------------------------------------------------------------------------
+# Usage logging
+# ---------------------------------------------------------------------------
 
 def _get_session_device() -> tuple[str | None, bool | None]:
     """
     Read the browser User-Agent once per session from st.context.headers
-    (Streamlit 1.33+) and derive a coarse mobile/desktop flag.
-
-    Cached in session_state so we don't repeat the header lookup on every
-    rerun. Returns (user_agent, is_mobile) — either may be None if headers
-    aren't exposed (older Streamlit, certain proxy configs).
+    and derive a coarse mobile/desktop flag. Cached in session_state.
+    Returns (user_agent, is_mobile); either may be None.
     """
     if "_device_classified" in st.session_state:
         return (
@@ -272,9 +313,6 @@ def _get_session_device() -> tuple[str | None, bool | None]:
     user_agent: str | None = None
     is_mobile: bool | None = None
     try:
-        # st.context.headers behaves dict-like but is case-insensitive in
-        # recent Streamlit versions. Guard anyway in case the context API
-        # is absent or empty.
         headers = getattr(st.context, "headers", None)
         if headers is not None:
             user_agent = headers.get("User-Agent") or headers.get("user-agent")
@@ -282,8 +320,6 @@ def _get_session_device() -> tuple[str | None, bool | None]:
         user_agent = None
 
     if user_agent:
-        # Coarse classification — the raw UA is also stored so any
-        # downstream analyst can re-classify with finer rules later.
         # iPad is intentionally NOT counted as mobile: Apple's UA reports
         # it as desktop and viewport-wise it behaves more like one.
         ua_lower = user_agent.lower()
@@ -298,18 +334,14 @@ def _get_session_device() -> tuple[str | None, bool | None]:
     return user_agent, is_mobile
 
 
-def _on_tab_click(tab_name: str, db_url: str = "") -> None:
-    """on_click callback for custom tab navigation buttons."""
-    prev = st.session_state.get("active_tab")
-    st.session_state["active_tab"] = tab_name
-    # Track that the user has interacted with the tab strip at least once.
-    # The mobile tab-reveal animation injects only on the rerun *after* the
-    # first such click, by which time Streamlit's initial reconciliation has
-    # finished and the columns DOM is stable enough to animate.
-    st.session_state["tab_clicked_once"] = True
+def _on_tab_change(db_url: str = "") -> None:
+    """on_change for st.tabs: log the switch to usage_events."""
+    prev = st.session_state.get("_last_tab", _TABS[0])
+    new = st.session_state.get("active_tab", _TABS[0])
+    st.session_state["_last_tab"] = new
     print(
         f"[app] {dt.datetime.now().isoformat(timespec='seconds')} "
-        f"tab change: {prev!r} → {tab_name!r}",
+        f"tab change: {prev!r} → {new!r}",
         file=sys.stderr,
         flush=True,
     )
@@ -320,54 +352,77 @@ def _on_tab_click(tab_name: str, db_url: str = "") -> None:
             session_id=st.session_state.get("_session_id", "unknown"),
             event_type="tab_change",
             from_tab=prev,
-            to_tab=tab_name,
+            to_tab=new,
             user_agent=ua,
             is_mobile=is_mobile,
         )
 
 
 # ---------------------------------------------------------------------------
-# Pref seeding — runs once per browser session
+# Page sections
 # ---------------------------------------------------------------------------
 
-_VALID_INDEX_LABELS   = set(INDEX_OPTIONS.keys())
-_VALID_SIZE_BY_LABELS = set(_SIZE_BY_OPTIONS.keys())
-_VALID_PRESET_LABELS  = set(_DATE_PRESETS.keys())
-_VALID_PALETTE_LABELS = {"Finviz-style (default)", "RdYlGn", "RdBu (colorblind-safe)", "Viridis (sequential)"}
-_VALID_INDICATORS     = {"SMA 20", "SMA 50", "EMA 20", "Bollinger Bands", "RSI", "MACD", "ATR", "OBV"}
+def _render_filter_bar(
+    min_day: dt.date, end_max_day: dt.date, prev_day: dt.date | None, span_label: str
+) -> None:
+    """Index universe + time range, above the tabs and visible on every tab."""
+    options = list(_DATE_PRESETS)
+    if _current_range_choice() == _CUSTOM_ACTIVE:
+        options.append(_CUSTOM_ACTIVE)
+    options.append(_CUSTOM_NEW)
+
+    # Keep the dropdown on the active range — except on the run that opens
+    # the Custom dialog, where it should keep showing "Custom…".
+    if not st.session_state.get("_custom_dialog_open"):
+        st.session_state["range_choice"] = _current_range_choice()
+
+    def fmt(opt: str) -> str:
+        if opt == _CUSTOM_ACTIVE:
+            return span_label
+        if opt == _CUSTOM_NEW:
+            return "Custom…"
+        return _DATE_PRESETS[opt][1]
+
+    with st.container(horizontal=True, wrap=False, width=460, key="filter_bar"):
+        st.selectbox(
+            "Index",
+            list(INDEX_OPTIONS),
+            key="index_choice",
+            label_visibility="collapsed",
+            filter_mode=None,   # no typing, so phones don't open a keyboard
+        )
+        st.selectbox(
+            "Time range",
+            options,
+            key="range_choice",
+            format_func=fmt,
+            on_change=_on_range_change,
+            label_visibility="collapsed",
+            filter_mode=None,
+        )
+
+    if st.session_state.pop("_custom_dialog_open", False):
+        current = _resolve_range(min_day, end_max_day, prev_day)[:2]
+        _custom_range_dialog(min_day, end_max_day, current)
 
 
-def _seed_prefs_once() -> None:
-    """
-    On the very first run of a browser session, read ~/.marketatlas/prefs.json
-    and pre-populate session_state with validated values.  Subsequent reruns
-    skip this so in-session widget changes are never overridden.
-    """
-    if st.session_state.get("_prefs_seeded"):
-        return
-    p = load_prefs()
-
-    if p.get("index") in _VALID_INDEX_LABELS:
-        st.session_state.setdefault("sidebar_index", p["index"])
-    else:
-        st.session_state.setdefault("sidebar_index", "All")
-
-    if p.get("size_by") in _VALID_SIZE_BY_LABELS:
-        st.session_state.setdefault("treemap_size_by", p["size_by"])
-
-    # The date range is deliberately NOT restored from prefs: on a hosted
-    # deployment prefs.json lives on the shared server, so restoring it
-    # would make the last visitor's range everyone's default. Every new
-    # session starts on _DEFAULT_PRESET instead.
-
-    if p.get("palette") in _VALID_PALETTE_LABELS:
-        st.session_state.setdefault("color_palette", p["palette"])
-
-    if isinstance(p.get("indicators"), list):
-        valid = [i for i in p["indicators"] if i in _VALID_INDICATORS]
-        st.session_state.setdefault("detail_indicators", valid)
-
-    st.session_state["_prefs_seeded"] = True
+def _render_dev_sidebar() -> None:
+    """Cache stats and clear button; developer mode only."""
+    with st.sidebar:
+        st.subheader("Cache")
+        if st.button("Clear cached results"):
+            _get_session_cache().clear()
+            _get_ohlcv_cache().clear()
+            st.session_state["treemap_cache_hits"] = 0
+            st.session_state["treemap_cache_misses"] = 0
+            st.success("Cleared cache")
+        hits = st.session_state.get("treemap_cache_hits", 0)
+        misses = st.session_state.get("treemap_cache_misses", 0)
+        st.caption(
+            f"Treemap: {hits} hits, {misses} misses "
+            f"· {len(_get_session_cache())} of 24 slots used"
+        )
+        st.caption(f"OHLCV: {len(_get_ohlcv_cache())} series cached")
 
 
 # ---------------------------------------------------------------------------
@@ -376,13 +431,10 @@ def _seed_prefs_once() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Market Atlas", layout="wide")
+    st.markdown(_CSS, unsafe_allow_html=True)
 
-    # First-run-per-session log. Streamlit reruns main() on every interaction;
-    # gating on session_state ensures one app-load line per browser session,
-    # not one per rerun.
+    # One stable id per browser session, reused for every usage_events row.
     if not st.session_state.get("_app_loaded_logged"):
-        # Stable per-browser-session id; reused for every usage-events row
-        # we write so analytics queries can group by session.
         st.session_state["_session_id"] = str(uuid.uuid4())
         print(
             f"[app] {dt.datetime.now().isoformat(timespec='seconds')} "
@@ -392,404 +444,6 @@ def main() -> None:
         )
         st.session_state["_app_loaded_logged"] = True
 
-    st.markdown(
-        """
-        <style>
-        .block-container { padding-top: 1rem; padding-bottom: 0.5rem; }
-        .stMetric { padding: 0.25rem 0.5rem; }
-        .stSidebar .block-container { padding-top: 0.75rem; }
-
-        /* Hide Streamlit's built-in "Ask Google" / "Ask ChatGPT" helper
-           links that appear next to error messages (st.error / st.exception)
-           in 1.31+. They surface our internal SQL/error text to third-party
-           AI tools, which we don't want for end users. The native "Copy"
-           button is left intact (no href, different selector). */
-        a[href*="google.com/search"],
-        a[href*="chatgpt.com/?q="],
-        a[href*="chat.openai.com/?q="] {
-          display: none !important;
-        }
-
-
-        /* Mover-strip: pull ticker cards close to the "Top 5" caption on desktop.
-           Mobile has its own spacing rules inside the @media block below. */
-        @media (min-width: 641px) {
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"]) {
-            margin-top: -0.75rem !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"] {
-            /* Pull each row of cards up toward its own caption. -0.5rem
-               left a 12px visible gap; -1rem brings it to ~4px so the
-               caption hugs the row visually. Applies to both rows. */
-            margin-top: -1rem !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"]
-            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
-            /* Was -0.5rem (pulled the ▼ caption up onto the green row).
-               Switching to a small positive margin gives the second row
-               clear breathing room from the first on desktop, while the
-               mobile rules in @media (max-width: 640px) below stay
-               untouched. */
-            margin-top: 0.25rem !important;
-          }
-          /* "Prices as of …" freshness line: tuck it right under the
-             subtitle caption instead of a full block-gap below it. */
-          [data-testid="stElementContainer"]:has(h1)
-            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"])
-            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
-            margin-top: -0.85rem !important;
-          }
-        }
-
-        /* ---------- Mobile (≤640px) ---------- */
-        @media (max-width: 640px) {
-          /* Pin title into the 60px Streamlit header on mobile.
-             Subtitle is injected as ::after so both render together inside
-             the fixed h1 — page content (tabs) starts right after the header. */
-          h1 {
-            position: fixed !important;
-            /* Vertically centered on the >> sidebar-toggle button (whose
-               center sits ~30px from the top of the 60px-tall header). */
-            top: 0.85rem !important;
-            left: 3rem !important;
-            font-size: 1.1rem !important;
-            line-height: 1.2 !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            z-index: 999990;
-            max-width: calc(100vw - 7rem);
-          }
-          h1::after {
-            content: "AI-Powered Market Intelligence Web App";
-            display: block;
-            font-size: 0.6rem;
-            line-height: 1.1;
-            font-weight: 400;
-            opacity: 0.65;
-            margin-top: 0.1rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-          }
-          /* Hide the real caption on mobile — its text now lives in h1::after. */
-          [data-testid="stElementContainer"]:has(h1)
-            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
-            display: none !important;
-          }
-          /* Content starts right below the title + subtitle stack. */
-          .block-container {
-            padding-top: 3rem !important;
-            padding-bottom: 0.5rem !important;
-          }
-          /* Tighten the gap between every vertical block on mobile so the
-             whole page feels more compact. Default is ~1rem between siblings. */
-          [data-testid="stVerticalBlock"] {
-            gap: 0.5rem !important;
-          }
-          /* Movers strip captions ("Top 5 ▲" / "Top 5 ▼") were taking a full
-             line-height of margin above and below. */
-          [data-testid="stCaptionContainer"] p {
-            margin-top: 0 !important;
-            margin-bottom: 0 !important;
-          }
-
-          /* Tab nav: keep all 5 buttons in one horizontally-scrollable row.
-             The marker div lives inside an stElementContainer; the columns row
-             is rendered as the immediately-following stLayoutWrapper. */
-          [data-testid="stElementContainer"]:has(div[data-tab-nav="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
-            flex-wrap: nowrap !important;
-            overflow-x: auto;
-            scrollbar-width: none;
-          }
-          /* Mount-time hint: translate every tab column left in unison so the
-             rightmost tabs (News + Index Overlap) start visible in the strip's
-             viewport, then ease back to 0 so the row settles at its normal
-             left-aligned position. Pure CSS — survives Streamlit re-renders. */
-          /* Mobile tab-reveal: when the body carries the .tab-hint-trigger
-             class (set after the user's first tab click), every tab column
-             plays a slide-in from the left so the rightmost tabs (News +
-             Index Overlap) are visible during the delay, then the row eases
-             back to its normal left-aligned resting position. */
-          body.tab-hint-trigger
-            [data-testid="stElementContainer"]:has(div[data-tab-nav="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
-            animation: tab-reveal 1.6s cubic-bezier(0.22, 0.61, 0.36, 1) 0.6s backwards;
-          }
-          [data-testid="stElementContainer"]:has(div[data-tab-nav="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]::-webkit-scrollbar {
-            display: none;
-          }
-          [data-testid="stElementContainer"]:has(div[data-tab-nav="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
-            flex: 0 0 auto !important;
-            min-width: 7rem !important;
-            width: auto !important;
-          }
-
-          /* Heatmap movers strip: fit all 5 cards in one row, no scroll.
-             align-items: flex-start prevents Streamlit's column flex from
-             stretching cards to equal heights — important because the
-             second row otherwise inherits extra vertical space from its
-             parent block and the colored border-left visibly elongates. */
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
-            flex-wrap: nowrap !important;
-            gap: 0.25rem !important;
-            overflow: visible !important;
-            align-items: flex-start !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
-            flex: 1 1 0 !important;
-            min-width: 0 !important;
-            width: auto !important;
-            align-self: flex-start !important;
-            height: auto !important;
-          }
-          /* Streamlit's stMarkdown chain reports a fixed text-line height
-             (~17px) regardless of the rendered card (31px), so the cards
-             visually overflow downward and any element below (the heatmap
-             chart) covers the bottom curve of the red brackets. Force the
-             stLayoutWrapper holding each mover row to reserve enough room
-             for the actual card height. */
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"] {
-            min-height: 36px !important;
-            padding-bottom: 16px !important;
-          }
-          /* Override: the upper (▲) row's wrapper sits above the "Top 5 ▼"
-             caption (not the chart), so its 16px bottom padding just
-             wastes vertical space. Tighten it to 2px. The lower (▼) row
-             keeps its 16px to protect bracket curves from the chart below.
-             The two rows are distinguished by data-mover-row="up"|"down"
-             on their preceding marker DIV. */
-          [data-testid="stElementContainer"]:has(div[data-mover-row="up"])
-            + [data-testid="stLayoutWrapper"] {
-            padding-bottom: 2px !important;
-          }
-          /* Compact each mover card so 5 fit across at 375px width.
-             width: 100% so the card fills its column (uniform widths across
-             both rows); height: auto + box-sizing keep the colored border
-             matched to the text content height, not stretched. */
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"]
-            [data-testid="stMarkdownContainer"] > div {
-            display: block !important;
-            width: 100% !important;
-            height: auto !important;
-            box-sizing: border-box !important;
-            padding: 4px 6px !important;
-            border-left-width: 3px !important;
-            min-width: 0 !important;
-            overflow: hidden !important;
-          }
-          /* Tight breathing room between the green row and the "Top 5 ▼"
-             caption — visible separation without any wasted vertical space. */
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"]
-            + [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {
-            margin-top: 0.15rem !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"]
-            [data-testid="stMarkdownContainer"] > div > div:first-child {
-            font-size: 0.58em !important;
-            line-height: 1.1 !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-mover-strip="true"])
-            + [data-testid="stLayoutWrapper"]
-            [data-testid="stMarkdownContainer"] > div > div:nth-child(2) {
-            font-size: 0.72em !important;
-            line-height: 1.15 !important;
-            white-space: nowrap !important;
-            overflow: hidden !important;
-            text-overflow: ellipsis !important;
-          }
-
-          /* Heatmap Options expander: keep the controls (Time range /
-             Sectors) on one line at mobile width. The radio/palette rules
-             below only apply if those hidden controls are restored. */
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
-            flex-wrap: nowrap !important;
-            gap: 0.4rem !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
-            min-width: 0 !important;
-            margin-bottom: 0 !important;
-          }
-          /* Stop the radio labels from wrapping letter-by-letter in narrow columns. */
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"] {
-            white-space: nowrap;
-          }
-
-          /* Mobile-only label shortening for the Heatmap Options row.
-             Python keeps the long labels (Treemap / Ranked Table / All sectors);
-             we hide the original text and inject the short form via ::before so
-             desktop sees the full names and mobile sees the compact ones. */
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"]:nth-of-type(1) p {
-            font-size: 0;
-          }
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"]:nth-of-type(1) p::before {
-            content: "Map";
-            font-size: 0.875rem;
-          }
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"]:nth-of-type(2) p {
-            font-size: 0;
-          }
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] label[data-baseweb="radio"]:nth-of-type(2) p::before {
-            content: "Table";
-            font-size: 0.875rem;
-          }
-          /* Palette selectbox: shorten the selected value's display text per
-             option. The displayed div has a `value` attribute carrying the
-             literal selected option, so we can match each long label and
-             inject the short version via ::before. RdYlGn is already short. */
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
-            div[value="Finviz-style (default)"],
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
-            div[value="RdBu (colorblind-safe)"],
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
-            div[value="Viridis (sequential)"] {
-            font-size: 0;
-          }
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
-            div[value="Finviz-style (default)"]::before {
-            content: "Finviz";
-            font-size: 0.875rem;
-          }
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
-            div[value="RdBu (colorblind-safe)"]::before {
-            content: "RdBu";
-            font-size: 0.875rem;
-          }
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stSelectbox"]
-            div[value="Viridis (sequential)"]::before {
-            content: "Viridis";
-            font-size: 0.875rem;
-          }
-
-          /* Multiselect placeholder: hide "All sectors" text and show "All".
-             The placeholder text node lives at value-container > inner > 2nd div
-             inside the BaseWeb select wrapper. */
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stMultiSelect"]
-            [data-baseweb="select"] > div:first-child > div:first-child > div:nth-child(2) {
-            font-size: 0;
-          }
-          [data-testid="stElementContainer"]:has(div[data-options-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stMultiSelect"]
-            [data-baseweb="select"] > div:first-child > div:first-child > div:nth-child(2)::before {
-            content: "All";
-            font-size: 0.875rem;
-          }
-
-          /* Sector Synopsis KPI row: 2-column grid.
-             flex-basis must subtract the row gap, otherwise two 50% items
-             overflow and each ends up on its own line. */
-          [data-testid="stElementContainer"]:has(div[data-kpi-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
-            flex-wrap: wrap !important;
-            gap: 0.5rem !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-kpi-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
-            flex: 0 0 calc(50% - 0.25rem) !important;
-            width: calc(50% - 0.25rem) !important;
-            min-width: 0 !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-kpi-row="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stMetricValue"] {
-            font-size: 1.1rem !important;
-          }
-
-          /* Index Overlap headline: 4 metrics on one line at any width. */
-          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] {
-            flex-wrap: nowrap !important;
-            gap: 0.3rem !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"] > div {
-            flex: 1 1 0 !important;
-            width: auto !important;
-            min-width: 0 !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stMetricLabel"] {
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-          }
-          /* Pin every label's inner <p> to the same size so all 4 read uniform. */
-          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stMetricLabel"] p {
-            font-size: 0.75rem !important;
-            font-weight: 400 !important;
-            line-height: 1.2 !important;
-          }
-          /* First metric ("Unique symbols") wouldn't fit on mobile — swap to
-             "Unique" via the hide-and-inject pseudo-element pattern. */
-          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]
-            > div:nth-child(1) [data-testid="stMetricLabel"] p {
-            font-size: 0 !important;
-          }
-          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stHorizontalBlock"]
-            > div:nth-child(1) [data-testid="stMetricLabel"] p::before {
-            content: "Unique";
-            font-size: 0.75rem;
-            font-weight: 400;
-            line-height: 1.2;
-          }
-          [data-testid="stElementContainer"]:has(div[data-kpi-row-4="true"])
-            + [data-testid="stLayoutWrapper"] [data-testid="stMetricValue"] {
-            font-size: 1.1rem !important;
-          }
-        }
-
-        /* Tab-reveal keyframes — outside @media so the engine registers them. */
-        @keyframes tab-reveal {
-          0%   { transform: translateX(-260px); }
-          100% { transform: translateX(0); }
-        }
-
-        /* Hide the chat_input character counter — Streamlit positions it
-           directly under the send-icon button where it's invisible, and
-           the count itself isn't useful enough to be worth repositioning.
-           The 500-char `max_chars` server-side limit still applies. */
-        [data-testid="InputInstructions"] {
-          display: none !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    _seed_prefs_once()
-
-    st.title("Market Atlas")
-    st.caption("AI-Powered Market Intelligence Web App")
-    # Filled in once the latest bar date is known (after the DB bounds query
-    # below). A separate element rather than part of the subtitle caption,
-    # because the mobile CSS hides that caption and redraws it via h1::after.
-    freshness_slot = st.empty()
-
     cfg = load_config()
     db_url = (cfg.get("db_url") or "").strip()
     marketaux_token = (cfg.get("marketaux_token") or "").strip()
@@ -798,347 +452,108 @@ def main() -> None:
     anthropic_model = (cfg.get("anthropic_model") or "").strip() or "claude-haiku-4-5"
 
     if not db_url:
+        st.title("Market Atlas")
         st.error(
             "Missing database configuration. Please set 'db_url' in "
             "src/config/configuration.json (or src/config/config.json)."
         )
         st.stop()
 
-    # Persist a 'session_load' usage event once per browser session. We do
-    # this here (not next to the stderr log up top) because db_url isn't
-    # loaded that early in main(). Best-effort — log_usage_event swallows
-    # all errors so a flaky DB can't block the dashboard from rendering.
-    #
-    # to_tab captures the *initial* tab the user lands on so analytics can
-    # see "default-tab views" even when the user never clicks. Hardcoded to
-    # "Heatmap" — the default in the _TABS init below.
+    # Persist a 'session_load' usage event once per browser session.
+    # Best-effort: log_usage_event swallows errors and runs on a thread.
     if not st.session_state.get("_app_load_persisted"):
         ua, is_mobile = _get_session_device()
         log_usage_event(
             db_url,
             session_id=st.session_state.get("_session_id", "unknown"),
             event_type="session_load",
-            to_tab="Heatmap",
+            to_tab=_TABS[0],
             user_agent=ua,
             is_mobile=is_mobile,
         )
         st.session_state["_app_load_persisted"] = True
 
-    # Construct the Anthropic client once per page render. None if no key
-    # is configured — the Ask tab renders a friendly warning in that case.
-    ai_client = None
-    if anthropic_api_key:
-        from src.ai.client import AIClient
-        try:
-            ai_client = AIClient(api_key=anthropic_api_key, model=anthropic_model)
-        except ValueError:
-            ai_client = None
-
-    # -----------------------------------------------------------------------
-    # Sidebar — index universe
-    # -----------------------------------------------------------------------
-    st.sidebar.header("Filters")
-
-    index_label = st.sidebar.selectbox(
-        "Index universe", list(INDEX_OPTIONS.keys()), key="sidebar_index"
-    )
-    index_key = INDEX_OPTIONS[index_label]
-
-    # -----------------------------------------------------------------------
-    # Sidebar — date bounds (from DB)
-    # -----------------------------------------------------------------------
+    # The index dropdown renders below the header, but its value is already
+    # in session_state at the start of the run, so the header can show how
+    # fresh the selected universe's prices are.
+    index_label = st.session_state.get("index_choice", next(iter(INDEX_OPTIONS)))
+    index_key = INDEX_OPTIONS.get(index_label, "all")
     min_day, max_day = fetch_available_date_bounds(db_url=db_url, index_key=index_key)
+
+    st.title("Market Atlas", anchor=False)
     if not min_day or not max_day:
         st.warning("No price data found for this universe yet.")
         st.stop()
+    st.caption(f"AI-Powered Market Intelligence Web App · {_freshness_label(max_day)}")
 
     end_max_day = max(min_day, max_day)
-    freshness_slot.caption(_freshness_label(max_day))
     prev_day = fetch_previous_trading_day(db_url, max_day)
+    st.session_state.setdefault("range_preset", _DEFAULT_PRESET)
+    date_from, date_to, range_label = _resolve_range(min_day, end_max_day, prev_day)
 
-    # -----------------------------------------------------------------------
-    # Sidebar — quick-range preset buttons
-    # -----------------------------------------------------------------------
-    if "active_preset" not in st.session_state:
-        st.session_state["active_preset"] = _DEFAULT_PRESET
+    _render_filter_bar(min_day, end_max_day, prev_day, _fmt_span(date_from, date_to))
 
-    # Dates applied from the Custom range dialog on the previous run.
-    _pending = st.session_state.pop("_pending_range", None)
-    if _pending:
-        st.session_state["active_preset"] = None
-        st.session_state["date_from"], st.session_state["date_to"] = _pending
-
-    st.sidebar.subheader("Quick range")
-    btn_cols = st.sidebar.columns(len(_SIDEBAR_PRESETS))
-    for col, label in zip(btn_cols, _SIDEBAR_PRESETS):
-        col.button(
-            label,
-            key=f"preset_btn_{label}",
-            type="primary" if st.session_state["active_preset"] == label else "secondary",
-            use_container_width=True,
-            on_click=_on_preset_click,
-            kwargs={
-                "label": label,
-                "min_day": min_day,
-                "end_max_day": end_max_day,
-                "prev_day": prev_day,
-            },
-        )
-
-    # -----------------------------------------------------------------------
-    # Sidebar — date pickers
-    # -----------------------------------------------------------------------
-
-    # Seed on first load
-    if not isinstance(st.session_state.get("date_from"), dt.date):
-        d_from, d_to = _preset_dates(st.session_state["active_preset"], prev_day)
-        st.session_state["date_from"] = max(min_day, min(d_from, end_max_day))
-        st.session_state["date_to"]   = max(min_day, min(d_to,   end_max_day))
-
-    # Clamp stored dates to available bounds BEFORE the key= widgets render.
-    # (Writing to session_state[key] after the widget renders raises an error.)
-    _clamped_from = max(min_day, min(st.session_state["date_from"], end_max_day))
-    _clamped_to   = max(min_day, min(st.session_state["date_to"],   end_max_day))
-    if _clamped_from != st.session_state["date_from"]:
-        st.session_state["date_from"] = _clamped_from
-    if _clamped_to != st.session_state["date_to"]:
-        st.session_state["date_to"] = _clamped_to
-
-    st.sidebar.subheader("Date range")
-    date_from = st.sidebar.date_input(
-        "Start date",
-        key="date_from",
-        min_value=min_day,
-        max_value=max_day,
-        help=f"Available data: {min_day} to {max_day}",
-    )
-    date_to = st.sidebar.date_input(
-        "End date",
-        key="date_to",
-        min_value=min_day,
-        max_value=end_max_day,
-        help=f"Available data: {min_day} to {end_max_day}",
-    )
-
-    # Clear preset highlight if the user manually edited either date.
-    # Preset button callbacks set active_preset before the rerun, so if
-    # the current dates no longer match what that preset would produce,
-    # the user must have overridden them manually.
-    _active_preset = st.session_state.get("active_preset")
-    if _active_preset and _active_preset in _DATE_PRESETS:
-        _exp_from, _exp_to = _preset_dates(_active_preset, prev_day)
-        _exp_from = max(min_day, min(_exp_from, end_max_day))
-        _exp_to   = max(min_day, min(_exp_to,   end_max_day))
-        if date_from != _exp_from or date_to != _exp_to:
-            st.session_state["active_preset"] = None
-
-    if date_from > date_to:
-        st.error("Start date must be ≤ end date.")
-        st.stop()
-
-    # Human-readable label used in KPI headings
-    _active_preset = st.session_state.get("active_preset")
-    if _active_preset and _active_preset in _DATE_PRESETS:
-        range_label = _DATE_PRESETS[_active_preset][1]
-    else:
-        days_span   = (date_to - date_from).days + 1
-        range_label = f"{days_span}d ({date_from.isoformat()} → {date_to.isoformat()})"
-
-    # -----------------------------------------------------------------------
-    # Sidebar — heatmap display (hidden; uncomment to re-enable size selector)
-    # -----------------------------------------------------------------------
-    # st.sidebar.subheader("Heatmap")
-    # size_by = _SIZE_BY_OPTIONS[st.sidebar.selectbox(
-    #     "Size tiles by",
-    #     list(_SIZE_BY_OPTIONS.keys()),
-    #     key="treemap_size_by",
-    #     help=(
-    #         "Dollar volume — tile area ∝ end price × shares traded.\n\n"
-    #         "Equal weight — every tile the same size; colour is the only signal.\n\n"
-    #         "Magnitude — tile area ∝ |return %|; highlights movers regardless of liquidity."
-    #     ),
-    # )]
-    size_by = "dollar_volume"
-
-    # -----------------------------------------------------------------------
-    # Sidebar — cache stats (always visible) + dev-only clear button
-    # -----------------------------------------------------------------------
-    cache_size = 24
-    st.sidebar.subheader("Cache")
     if _DEVELOPER_MODE:
-        if st.sidebar.button("Clear cached results"):
-            _get_session_cache().clear()
-            _get_ohlcv_cache().clear()
-            st.session_state["treemap_cache_hits"]   = 0
-            st.session_state["treemap_cache_misses"] = 0
-            st.sidebar.success("Cleared cache")
-    _tm_hits   = st.session_state.get("treemap_cache_hits",   0)
-    _tm_misses = st.session_state.get("treemap_cache_misses", 0)
-    _tm_slots  = len(_get_session_cache())
-    _ov_slots  = len(_get_ohlcv_cache())
-    st.sidebar.caption(
-        f"Treemap: {_tm_hits} hits, {_tm_misses} misses "
-        f"· {_tm_slots} of {cache_size} slots used"
+        _render_dev_sidebar()
+
+    # Tabs: only the open tab's code runs (on_change makes them lazy), so
+    # e.g. Ask AI never waits on the treemap query.
+    tabs = st.tabs(
+        _TABS,
+        key="active_tab",
+        default=_TABS[0],
+        on_change=_on_tab_change,
+        kwargs={"db_url": db_url},
     )
-    st.sidebar.caption(f"OHLCV: {_ov_slots} series cached")
 
-    # First-load hint for phone users — rendered RIGHT BEFORE the data
-    # spinner so the 4s animation plays while the user is idle waiting
-    # for the heatmap to load. Best attention moment: nothing else is
-    # on screen to compete for the eye. position:fixed + high z-index
-    # + pointer-events:none means it overlays the spinner cleanly
-    # without blocking taps. Shown once per session.
-    _, is_mobile = _get_session_device()
-    if is_mobile and not st.session_state.get("_mobile_hint_shown"):
-        st.markdown(
-            """
-            <div class="mobile-best-experience-hint">
-              ⚡ Use desktop for best experience
-            </div>
-            <style>
-            @keyframes mobile-hint-fade {
-              0%   { opacity: 0; transform: translateY(-8px); }
-              12%  { opacity: 1; transform: translateY(0);    }
-              88%  { opacity: 1; transform: translateY(0);    }
-              100% { opacity: 0; transform: translateY(-8px); }
-            }
-            .mobile-best-experience-hint {
-              position: fixed;
-              /* Push below Streamlit's top header strip. 3.5rem clears
-                 it on both minimal and full toolbar modes. */
-              top: 3.5rem;
-              /* Center via auto margins on a max-content-wide element
-                 instead of left:50% + translateX(-50%). The latter
-                 broke when an ancestor (Streamlit's app shell) has a
-                 transform, since that re-establishes the containing
-                 block for fixed-position descendants and the 50% no
-                 longer maps to the viewport center. */
-              left: 0;
-              right: 0;
-              margin-inline: auto;
-              width: max-content;
-              max-width: calc(100vw - 2rem);
-              transform: translateY(-8px);
-              background: rgba(0, 0, 0, 0.82);
-              color: #fff;
-              font-size: 0.85rem;
-              padding: 0.5rem 0.9rem;
-              border-radius: 999px;
-              /* Streamlit's stHeader uses ~999990. Sit above it. */
-              z-index: 9999999;
-              pointer-events: none;
-              opacity: 0;
-              animation: mobile-hint-fade 4s ease forwards;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.session_state["_mobile_hint_shown"] = True
+    def load_prices():
+        with st.spinner("Loading prices…"):
+            df = get_treemap_data_cached(
+                db_url=db_url,
+                index_key=index_key,
+                date_from=date_from,
+                date_to=date_to,
+                cache_size=24,
+            )
+        if df.empty:
+            st.warning("No prices for this range. Try a longer time range.")
+            return None
+        return df
 
-    # -----------------------------------------------------------------------
-    # Data fetch (shared across all views)
-    # -----------------------------------------------------------------------
-    with st.spinner("Loading data..."):
-        df = get_treemap_data_cached(
-            db_url=db_url,
-            index_key=index_key,
-            date_from=date_from,
-            date_to=date_to,
-            cache_size=cache_size,
-        )
+    for name, tab in zip(_TABS, tabs):
+        if not tab.open:
+            continue
+        with tab:
+            if name == "Ask AI":
+                ai_client = None
+                if anthropic_api_key:
+                    from src.ai.client import AIClient
+                    try:
+                        ai_client = AIClient(api_key=anthropic_api_key, model=anthropic_model)
+                    except ValueError:
+                        ai_client = None
+                render_ask_tab(
+                    ai_client=ai_client,
+                    db_url_readonly=db_url_readonly,
+                    db_url=db_url,
+                )
+                continue
 
-    if df.empty:
-        st.warning("No data returned for this range/universe. Try expanding the date range.")
-        st.stop()
+            if name == "Index Overlap":
+                render_index_overlap_tab(db_url)
+                continue
 
-    # -----------------------------------------------------------------------
-    # Tab navigation
-    # Session-state buttons replace st.tabs, which resets to tab 0 on every
-    # full page rerun in Streamlit 1.53 (key= parameter not supported).
-    # -----------------------------------------------------------------------
-    # Index Overlap tab temporarily hidden — render branch kept below in case
-    # we re-enable it. To bring it back, add "Index Overlap" to this list.
-    # Ask AI is positioned right after Heatmap so the AI capability is the
-    # second thing users notice, without displacing the visual treemap as
-    # the landing page.
-    _TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
-    if "active_tab" not in st.session_state:
-        st.session_state["active_tab"] = "Heatmap"
-
-    # Marker div lets the mobile CSS target *only* this columns row and turn
-    # it into a horizontally scrollable strip instead of stacking 5 buttons
-    # vertically on narrow viewports.
-    st.markdown('<div data-tab-nav="true"></div>', unsafe_allow_html=True)
-    _tab_cols = st.columns(len(_TABS))
-    for _col, _tab_name in zip(_tab_cols, _TABS):
-        _col.button(
-            _tab_name,
-            key=f"tab_nav_{_tab_name}",
-            type="primary" if st.session_state["active_tab"] == _tab_name else "secondary",
-            use_container_width=True,
-            on_click=_on_tab_click,
-            kwargs={"tab_name": _tab_name, "db_url": db_url},
-        )
-
-    # Mobile tab-reveal hint: a CSS class is added to <body> on the rerun
-    # *after* the first tab click. The mobile-only CSS rule applies the
-    # tab-reveal keyframe animation only when that class is present, so the
-    # animation plays once after the user starts interacting (by which time
-    # Streamlit's initial reconciliation has settled).
-    if st.session_state.get("tab_clicked_once"):
-        st_components.html(
-            """
-            <script>
-              (function () {
-                const body = window.parent.document.body;
-                if (body) body.classList.add('tab-hint-trigger');
-              })();
-            </script>
-            """,
-            height=0,
-        )
-
-    # -----------------------------------------------------------------------
-    # Active view
-    # -----------------------------------------------------------------------
-    _active_tab = st.session_state["active_tab"]
-
-    if _active_tab == "Heatmap":
-        render_heatmap_tab(
-            df, index_key, date_from, date_to, size_by=size_by,
-            range_picker=lambda: _render_range_select(min_day, end_max_day, prev_day),
-        )
-        if st.session_state.pop("_open_custom_range", False):
-            _custom_range_dialog(min_day, end_max_day)
-
-    elif _active_tab == "Sector Synopsis":
-        render_sector_synopsis_tab(df, range_label, db_url, date_from, date_to)
-
-    elif _active_tab == "Stock Detail":
-        render_stock_detail(df, db_url, date_from, date_to)
-
-    elif _active_tab == "News":
-        render_news_tab(df, marketaux_token)
-
-    elif _active_tab == "Index Overlap":
-        render_index_overlap_tab(db_url)
-
-    elif _active_tab == "Ask AI":
-        render_ask_tab(
-            ai_client=ai_client,
-            db_url_readonly=db_url_readonly,
-            db_url=db_url,
-        )
-
-    # Persist UI prefs to disk so they survive tab close / refresh.
-    save_prefs({
-        "index":          st.session_state.get("sidebar_index",    "All"),
-        "palette":        st.session_state.get("color_palette",    "Finviz-style (default)"),
-        "size_by":        st.session_state.get("treemap_size_by",  "Dollar volume"),
-        "indicators":     st.session_state.get("detail_indicators", ["SMA 20", "SMA 50"]),
-        "default_preset": st.session_state.get("active_preset",    _DEFAULT_PRESET),
-    })
+            df = load_prices()
+            if df is None:
+                continue
+            if name == "Heatmap":
+                render_heatmap_tab(df, index_key, date_from, date_to)
+            elif name == "Sector Synopsis":
+                render_sector_synopsis_tab(df, range_label, db_url, date_from, date_to)
+            elif name == "Stock Detail":
+                render_stock_detail(df, db_url, date_from, date_to)
+            elif name == "News":
+                render_news_tab(df, marketaux_token)
 
 
 if __name__ == "__main__":

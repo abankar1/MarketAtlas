@@ -47,11 +47,10 @@ repo root/
 │   ├── backfill/
 │   │   └── backfill_10y.py             # one-time historical backfill
 │   ├── dashboard/
-│   │   ├── app.py                      # Streamlit entry point — config, sidebar, nav, usage_events logging
+│   │   ├── app.py                      # Streamlit entry point — config, filter bar, tabs, usage_events logging
 │   │   ├── data.py                     # DB queries + session-level LRU caches
 │   │   ├── charts.py                   # Plotly figure builders (treemap + candlestick)
 │   │   ├── indicators.py               # pure-pandas technical indicator functions
-│   │   ├── prefs.py                    # load/save ~/.marketatlas/prefs.json (sidebar defaults)
 │   │   ├── heatmap.py                  # Heatmap tab renderer + top-5 movers strip + CSV export
 │   │   ├── sector_synopsis.py          # Sector Synopsis tab renderer
 │   │   ├── stock_detail.py             # Stock Detail tab renderer + CSV export + badges
@@ -168,7 +167,7 @@ Time-series table, indexed on `ts`. One row per symbol per trading day.
 | split_factor| NUMERIC     |                         |
 | dividend    | NUMERIC     |                         |
 
-All timestamp queries cast via `(ts AT TIME ZONE 'UTC')::date` to normalize to date.
+Queries filter `ts` directly (see `utc_day_bounds` in `data.py` and constraint 18) and cast `(ts AT TIME ZONE 'UTC')::date` only in the SELECT list.
 
 ### `public.sp500_constituents` / `nasdaq100_constituents` / `dow30_constituents`
 Index membership tables. Schema differs slightly per table (column name for company differs),
@@ -289,12 +288,11 @@ The dashboard is split into one entry-point module and several supporting module
 
 | Module | Responsibility |
 |--------|---------------|
-| `app.py` | Page config, global CSS, sidebar controls, top-level data fetch, session-state tab navigation, lifecycle logging (`session_load` / `tab_change` → `usage_events`) |
+| `app.py` | Page config, small global stylesheet, header + filter bar (index, time range, Custom dialog), native `st.tabs` (only the open tab runs), lifecycle logging (`session_load` / `tab_change` → `usage_events`). Developer mode adds a cache sidebar. |
 | `data.py` | `connect`, `build_universe_sql`, `fetch_treemap_data`, `fetch_available_date_bounds`, `fetch_index_overlap`, `get_treemap_data_cached`, `get_ohlcv_cached`, LRU cache helpers |
 | `charts.py` | `build_fig` (treemap), `build_detail_fig` (multi-panel candlestick), `build_compare_fig` (multi-symbol rebased) |
 | `indicators.py` | Pure-pandas indicator computations — no Streamlit or DB dependencies |
-| `prefs.py` | `load_prefs` / `save_prefs` for `~/.marketatlas/prefs.json` (sidebar defaults survive browser restarts) |
-| `heatmap.py` | `render_heatmap_tab` — Options row (time-range dropdown + sector filter), top-5 movers strip (▲/▼), Finviz-style treemap. Palette selector and ranked-table view are hidden but kept in code. |
+| `heatmap.py` | `render_heatmap_tab` — sector filter, top-5 / bottom-5 movers strip (one HTML grid), Worst→Best colour key, Finviz-style treemap. Palette selector and ranked-table view are hidden but kept in code. |
 | `sector_synopsis.py` | `render_sector_synopsis_tab` (entry point) + `render_sector_synopsis` (`@st.fragment`) |
 | `stock_detail.py` | `render_stock_detail` (`@st.fragment`) — symbol picker, index membership badges, candlestick chart, OHLCV CSV export, Compare-mode multi-symbol chart |
 | `index_overlap.py` | `render_index_overlap_tab` — present in code but **hidden** from the tab strip (still renderable if the tab is re-added to `_TABS`) |
@@ -303,18 +301,33 @@ The dashboard is split into one entry-point module and several supporting module
 
 ### Tab Navigation
 
-Tabs are implemented as `st.button` widgets backed by `session_state["active_tab"]`.
-This replaces `st.tabs`, which resets to tab 0 on every full page rerun in Streamlit 1.53.
+Tabs are native `st.tabs` with `key="active_tab"` and an `on_change` callback.
+With `on_change` set, Streamlit tracks the selected tab and each tab's `.open`
+is True only for the selected one, so `main()` runs only the open tab's code
+(e.g. Ask AI never waits on the treemap query).
 
 ```python
 # src/dashboard/app.py
 # Index Overlap is intentionally omitted from the visible strip; its render
 # branch and import remain in place so re-enabling is a one-line change.
 _TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
-# Buttons use type="primary"/"secondary" based on active_tab.
-# _on_tab_click callback sets session_state["active_tab"] AND fires a
-# fire-and-forget log_usage_event(..., 'tab_change', ...) on a daemon thread.
+tabs = st.tabs(_TABS, key="active_tab", default=_TABS[0],
+               on_change=_on_tab_change, kwargs={"db_url": db_url})
+# _on_tab_change fires a fire-and-forget log_usage_event(..., 'tab_change', ...).
 ```
+
+### Filter bar and time range
+
+Index and time range sit in one row above the tabs (`st.container(horizontal=True, wrap=False)`,
+both selectboxes with `filter_mode=None` so phones don't open a keyboard).
+The range lives in plain session keys, not widget keys: `range_preset`
+(`"24H"`, `"1W"`, `"1M"`, `"3M"`, `"6M"`, `"1Y"`, or `None` for custom) and
+`custom_range` (a date tuple). `_resolve_range()` turns them into
+`(date_from, date_to, label)` each run, clamped to the data, so presets roll
+forward with new data. The dropdown (`range_choice`) is re-synced from
+`range_preset` before it renders, except on the run that opens the Custom
+dialog. The dialog (`@st.dialog`, `on_dismiss` restores the dropdown) applies
+the range once both dates are picked and calls `st.rerun()`.
 
 ---
 
@@ -326,20 +339,22 @@ _TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
 |----------|-----------|---------|
 | `load_config` | `() -> dict` | Delegates to `src.config.settings.load_settings()` (st.secrets / env vars / JSON file). Returns `{}` on missing config so caller can show a friendly error. |
 | `_preset_dates` | `(key: str, prev_day=None) -> (date, date)` | Compute (date_from, date_to) for a preset key. `"24H"` starts at `prev_day` (previous trading day, from `fetch_previous_trading_day`) so the range spans two closes |
-| `_on_preset_click` | `(label, min_day, end_max_day, prev_day=None) -> None` | `on_click` callback for preset buttons; updates session_state before rerun |
-| `_render_range_select` | `(min_day, end_max_day, prev_day) -> None` | Heatmap time-range dropdown (`_RANGE_CHOICES`). Re-synced from `active_preset` before render, so sidebar buttons and the dropdown always agree |
-| `_custom_range_dialog` | `(min_day, end_max_day) -> None` | `@st.dialog` range calendar for **Custom**. Stores `_pending_range`; `main` applies it before the sidebar `date_from`/`date_to` widgets render |
-| `_on_tab_click` | `(tab_name: str, db_url: str = "") -> None` | `on_click` callback for tab nav buttons; sets active_tab AND fires `log_usage_event(..., 'tab_change', ...)` (fire-and-forget on a daemon thread) |
+| `_resolve_range` | `(min_day, end_max_day, prev_day) -> (date, date, str)` | Current range from `range_preset` / `custom_range`, clamped to the data, plus its heading label |
+| `_render_filter_bar` | `(min_day, end_max_day, prev_day, span_label) -> None` | Index + time-range dropdowns above the tabs; opens the Custom dialog when `Custom…` is picked |
+| `_custom_range_dialog` | `(min_day, end_max_day, current) -> None` | `@st.dialog` range calendar for **Custom**; writes `range_preset=None` + `custom_range` and reruns. `on_dismiss` puts the dropdown back on the active range |
+| `_on_tab_change` | `(db_url: str = "") -> None` | `st.tabs` on_change; logs `tab_change` to `usage_events` (fire-and-forget) |
 | `main` | `() -> None` | Streamlit entry point. Generates `_session_id` (UUID) once per session. Logs `session_load` (with `to_tab='Heatmap'`) once per session, gated by `_app_load_persisted`. |
 
 ### `src/dashboard/data.py`
 
 | Function | Signature | Purpose |
 |----------|-----------|---------|
-| `connect` | `(db_url: str)` | Returns a psycopg connection |
+| `connect` | `(db_url: str)` | Borrows a connection from a per-process `psycopg_pool.ConnectionPool` (`@st.cache_resource`; max 4, idle connections close after 240s so Neon can scale to zero). Use as `with connect(db_url) as conn:` |
+| `utc_day_bounds` | `(date_from, date_to) -> {ts_from, ts_to}` | Half-open UTC timestamp bounds so queries filter `ts` directly (index-friendly) |
 | `build_universe_sql` | `(index_key: str) -> str` | Returns CTE SQL for the selected universe |
 | `fetch_treemap_data` | `(conn, index_key, date_from, date_to) -> DataFrame` | Core heatmap query |
-| `fetch_available_date_bounds` | `(db_url, index_key) -> (date, date)` | Min/max available bar dates; `@st.cache_data` TTL=60s |
+| `fetch_available_date_bounds` | `(db_url, index_key) -> (date, date)` | Min/max bar dates (plain min/max on `ts`; `index_key` unused since all indexes share trading days); `@st.cache_data` TTL=1h |
+| `fetch_previous_trading_day` | `(db_url, before) -> date` | Latest trading day before `before`; used by the 24-hour range; TTL=1h |
 | `fetch_index_overlap` | `(db_url) -> DataFrame` | Per-symbol boolean index-membership flags; `@st.cache_data` TTL=3600s. Columns: `symbol`, `name`, `sector`, `in_sp500`, `in_nasdaq100`, `in_dow30` |
 | `_get_session_cache` | `() -> OrderedDict` | Returns (or creates) the treemap LRU cache from session_state |
 | `get_treemap_data_cached` | `(db_url, index_key, date_from, date_to, cache_size=24) -> DataFrame` | Session-level LRU wrapper for treemap data |
@@ -351,7 +366,7 @@ _TABS = ["Heatmap", "Ask AI", "Sector Synopsis", "Stock Detail", "News"]
 | Function | Signature | Purpose |
 |----------|-----------|---------|
 | `build_fig` | `(df, color_range) -> Figure` | Builds Plotly treemap (RdYlGn, sized by dollar volume) |
-| `build_detail_fig` | `(df, symbol, active: list[str]) -> Figure` | Builds dynamic multi-panel candlestick figure |
+| `build_detail_fig` | `(df, symbol, active: list[str], view_from=None) -> Figure` | Builds dynamic multi-panel candlestick figure. Callers load `INDICATOR_WARMUP_DAYS` (120) of extra history; indicators are computed on all of it and every trace is trimmed to start at `view_from` |
 
 `build_detail_fig` layout rules:
 - **Row 1**: Candlestick + price overlays (SMA 20/50, EMA 20, Bollinger Bands)
@@ -380,7 +395,7 @@ All functions are pure pandas — no Streamlit or DB imports.
 | `render_ranked_table` | `(df, color_range) -> None` | Renders sortable table of all stocks by return % with RdYlGn coloring |
 | `_build_export_csv` | `(df) -> bytes` | Builds in-memory CSV: symbol, name, sector, return_pct, dollar_volume, percentile_rank |
 | `_exceeds_three_months` | `(d_from, d_to) -> bool` | Calendar-month guard — True if span is strictly > 3 months |
-| `render_heatmap_tab` | `(df, index_key, date_from, date_to, size_by, range_picker=None) -> None` | Full Heatmap tab: Options row (`range_picker` callable from app.py + sector filter), movers strip, treemap |
+| `render_heatmap_tab` | `(df, index_key, date_from, date_to, size_by="dollar_volume") -> None` | Full Heatmap tab: sector filter, movers strip, colour key, treemap |
 
 CSV export is disabled (`disabled=True`, empty data) when the date range exceeds 3 calendar months.
 
@@ -392,7 +407,7 @@ CSV export is disabled (`disabled=True`, empty data) when the date range exceeds
 | `render_sector_synopsis` | `(df, sector, range_label, db_url, date_from, date_to) -> None` | `@st.fragment` — KPI row + ranked bar chart + inline stock detail on click |
 | `render_sector_synopsis_tab` | `(df, range_label, db_url, date_from, date_to) -> None` | Tab entry point — sector selectbox + calls fragment |
 
-KPI row uses `st.caption` for the period label (above the metrics) and custom column widths `[0.7, 1.6, 1.6, 1.4, 1.7]` so "Stocks" doesn't over-claim space. The selectbox is **outside** the fragment so changing the sector triggers a full rerun.
+KPI row uses `st.caption` for the period label, then one HTML grid (`.ma-kpis`, styles in app.py): a single row on desktop, two per row on phones. The selectbox is **outside** the fragment so changing the sector triggers a full rerun.
 
 ### `src/dashboard/stock_detail.py`
 
@@ -504,7 +519,7 @@ streamlit run src/dashboard/app.py
 ## Caching Architecture
 
 ### `@st.cache_data` (cross-session, Streamlit-managed)
-- `fetch_available_date_bounds`: TTL = 60 seconds
+- `fetch_available_date_bounds`, `fetch_previous_trading_day`: TTL = 1 hour (the header's "Prices as of" line comes from it)
 - `fetch_index_overlap`: TTL = 3600 seconds — constituent membership is stable between daily syncs; shared across all browser sessions
 
 ### Session-level LRU (per browser tab, stored in `st.session_state`)
@@ -516,7 +531,7 @@ Two separate `OrderedDict` caches in `src/dashboard/data.py`, evicted by LRU:
 | `ohlcv_cache` | `(symbol, date_from_iso, date_to_iso)` | 20 |
 
 Stats (`treemap_cache_hits`, `treemap_cache_misses`) are tracked in session_state.  
-Both caches are cleared together by the "Clear cached results" sidebar button (developer-only).
+Both caches are cleared together by the "Clear cached results" button in the developer-mode sidebar.
 
 ### LLM decision caches (process-wide, `src/ai/cache.py`)
 Three module-level `TTLCache` instances (12h TTL, 200 entries each) — survive Streamlit reruns within the same worker process; lost on process restart:
@@ -531,7 +546,7 @@ All keys fold `PROMPT_VERSION` + `model_id` + `last_ticker` + `transcript_hash` 
 - Different conversations don't collide on identical follow-ups (e.g. "their names" after different sets of symbols).
 - Bumping `PROMPT_VERSION` invalidates every stale entry on the next deploy. The history is documented inline in `cache.py`. Bumping is essentially the only way to flush after a prompt or template edit, and it costs one character.
 
-The dashboard's developer-only "Clear AI cache" sidebar button calls `clear_all()` to wipe all three.
+The dashboard's developer-only "Clear AI cache" button on the Ask AI tab calls `clear_all()` to wipe all three.
 
 ---
 
@@ -555,7 +570,7 @@ Fragment parameters are passed by the full-page render and are frozen for the li
 
 ## Known Behavioral Constraints
 
-1. **Treemap drill-down state is ephemeral.** Plotly stores drill-down navigation client-side only. Any Streamlit rerun (e.g., changing sidebar filters, clicking the raw data expander) resets the treemap to its root view.
+1. **Treemap drill-down state is ephemeral.** Plotly stores drill-down navigation client-side only. Any Streamlit rerun (e.g., changing the index or time range) resets the treemap to its root view.
 
 2. **`on_select` does not fire on treemap clicks.** Treemap clicks are consumed as Plotly drill-down navigation events, not selection events. `on_select="rerun"` is only effective on non-treemap chart types (e.g., bar, scatter).
 
@@ -571,9 +586,9 @@ Fragment parameters are passed by the full-page render and are frozen for the li
 
 8. **`ensure_schema()` must be called before any sync or dry-run.** Constituent queries use `is_active IS NOT FALSE`, which fails if the column doesn't exist yet.
 
-9. **`st.tabs` is not used.** Streamlit 1.53 resets `st.tabs` to tab 0 on every full page rerun and does not support a `key=` parameter. The dashboard uses session-state button navigation instead — four `st.button` widgets with `type="primary"/"secondary"` controlled by `session_state["active_tab"]`.
+9. **Tabs are lazy `st.tabs`.** `st.tabs(..., key="active_tab", on_change=...)` keeps the selected tab across reruns and exposes `.open`; only the open tab's code runs. (Older Streamlit reset `st.tabs` on every rerun, which is why the app once used buttons.)
 
-10. **Date inputs use `key=` with pre-widget clamping.** `key="date_from"` / `key="date_to"` make widget state and session_state the same object — manual changes apply immediately (no "two-click" lag). Session_state values are clamped to the available data range *before* the widgets render; writing to `session_state[key]` after the widget is rendered raises `StreamlitAPIException`. Preset-button `on_click` callbacks run before the rerun so the widget picks up the preset dates correctly.
+10. **The time range is plain session state, not widget state.** `range_preset` / `custom_range` are set by the dropdown's on_change and the Custom dialog, then resolved and clamped every run (`_resolve_range`). No widget owns them, so the dialog can write them directly; the dropdown's own key (`range_choice`) is only written before it renders or in callbacks.
 
 11. **CSV export is rate-limited to 3 calendar months.** Both the Heatmap and Stock Detail download buttons are disabled when `date_to > date_from + 3 calendar months`. The check is calendar-month-aware (not a flat 90-day count): `_exceeds_three_months(d_from, d_to)` in `heatmap.py` and `stock_detail.py`.
 

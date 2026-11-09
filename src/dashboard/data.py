@@ -21,6 +21,7 @@ from collections import OrderedDict
 
 import pandas as pd
 import psycopg
+from psycopg_pool import ConnectionPool
 import streamlit as st
 
 from src.db.repositories import fetch_ohlcv
@@ -42,8 +43,40 @@ def _ttl_bucket() -> int:
 # DB connection
 # ---------------------------------------------------------------------------
 
-def connect(db_url: str) -> psycopg.Connection:
-    return psycopg.connect(db_url)
+@st.cache_resource(show_spinner=False)
+def _pool(db_url: str) -> ConnectionPool:
+    """
+    One small connection pool per process. Opening a TLS connection to
+    Neon costs ~0.4s, several times a typical query, so reusing them makes
+    uncached clicks noticeably faster. Idle connections close after four
+    minutes so the Neon compute can still scale to zero.
+    """
+    return ConnectionPool(
+        db_url,
+        min_size=0,
+        max_size=4,
+        max_idle=240,
+        check=ConnectionPool.check_connection,
+        kwargs={"autocommit": True},
+        open=True,
+    )
+
+
+def connect(db_url: str):
+    """Borrow a pooled connection: `with connect(db_url) as conn: ...`."""
+    return _pool(db_url).connection()
+
+
+def utc_day_bounds(date_from: dt.date, date_to: dt.date) -> dict[str, dt.datetime]:
+    """
+    {ts_from, ts_to} for `ts >= ts_from AND ts < ts_to`: midnight UTC on
+    date_from up to (not including) midnight UTC after date_to.
+    """
+    utc = dt.timezone.utc
+    return {
+        "ts_from": dt.datetime.combine(date_from, dt.time(), tzinfo=utc),
+        "ts_to": dt.datetime.combine(date_to + dt.timedelta(days=1), dt.time(), tzinfo=utc),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +159,7 @@ def fetch_treemap_data(
             b.close AS start_close
         FROM public.daily_bars b
         JOIN universe u ON u.symbol = b.symbol
-        WHERE ((b.ts AT TIME ZONE 'UTC')::date) BETWEEN %(date_from)s AND %(date_to)s
+        WHERE b.ts >= %(ts_from)s AND b.ts < %(ts_to)s
         ORDER BY b.symbol, b.ts ASC
     ),
     end_px AS (
@@ -136,7 +169,7 @@ def fetch_treemap_data(
             b.volume AS end_volume
         FROM public.daily_bars b
         JOIN universe u ON u.symbol = b.symbol
-        WHERE ((b.ts AT TIME ZONE 'UTC')::date) BETWEEN %(date_from)s AND %(date_to)s
+        WHERE b.ts >= %(ts_from)s AND b.ts < %(ts_to)s
         ORDER BY b.symbol, b.ts DESC
     )
     SELECT
@@ -160,7 +193,10 @@ def fetch_treemap_data(
     LEFT JOIN end_px e ON e.symbol = u.symbol
     """
 
-    df = pd.read_sql(q, conn, params={"date_from": date_from, "date_to": date_to})
+    # Filter on ts itself (not a date cast of it) so Postgres can use the
+    # ts index instead of scanning every bar. Same days as
+    # (ts AT TIME ZONE 'UTC')::date BETWEEN date_from AND date_to.
+    df = pd.read_sql(q, conn, params=utc_day_bounds(date_from, date_to))
 
     # Dedup cross-listed symbols in the "all" universe (keep first by index_name sort)
     if index_key == "all":
@@ -205,35 +241,30 @@ def fetch_index_overlap(db_url: str) -> pd.DataFrame:
         return pd.read_sql(q, conn)
 
 
-@st.cache_data(show_spinner=False, ttl=CACHE_TTL_SECONDS)
+# One hour, not CACHE_TTL_SECONDS: the header's "Prices as of" line comes
+# from max_day, and should catch up soon after the daily update lands.
+@st.cache_data(show_spinner=False, ttl=3600)
 def fetch_available_date_bounds(
     db_url: str, index_key: str
 ) -> tuple[dt.date | None, dt.date | None]:
     """
-    Return (min_date, max_date) of bars available for the selected universe.
-    Cached for CACHE_TTL_SECONDS.
+    Return (min_date, max_date) of the bars in the database.
+
+    `index_key` is kept for the call signature; all three indexes share the
+    same trading days, so a plain min/max (two index lookups on ts) answers
+    it without joining the constituent tables.
     """
-    universe_sql = build_universe_sql(index_key)
-
-    q = f"""
-    WITH universe AS (
-        {universe_sql}
-    )
-    SELECT
-        min((b.ts AT TIME ZONE 'UTC'))::date AS min_day,
-        max((b.ts AT TIME ZONE 'UTC'))::date AS max_day
-    FROM public.daily_bars b
-    JOIN universe u ON u.symbol = b.symbol
+    q = """
+    SELECT (min(ts) AT TIME ZONE 'UTC')::date, (max(ts) AT TIME ZONE 'UTC')::date
+    FROM public.daily_bars
     """
-
-    with connect(db_url) as conn:
-        df = pd.read_sql(q, conn)
-    if df.empty:
-        return None, None
-    return df.loc[0, "min_day"], df.loc[0, "max_day"]
+    with connect(db_url) as conn, conn.cursor() as cur:
+        cur.execute(q)
+        row = cur.fetchone()
+    return (row[0], row[1]) if row else (None, None)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_previous_trading_day(db_url: str, before: dt.date) -> dt.date | None:
     """
     Latest trading day strictly before `before` (skips weekends/holidays).
