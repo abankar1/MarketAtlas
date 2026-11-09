@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as st_components
 
-from src.dashboard.charts import build_detail_fig
+from src.dashboard.charts import INDICATOR_WARMUP_DAYS, build_detail_fig
 from src.dashboard.data import get_ohlcv_cached
 from src.dashboard.heatmap import _PALETTE_OPTIONS
 
@@ -129,7 +129,7 @@ def _render_breadth_bar(breadth: pd.DataFrame) -> None:
     )
     return st.plotly_chart(
         fig,
-        use_container_width=True,
+        width="stretch",
         theme=None,
         on_select="rerun",
         key="breadth_bar",
@@ -176,14 +176,21 @@ def render_sector_synopsis(
     # range_label shown once as caption; removed from individual metric headings
     # to prevent truncation. Column widths weighted by content needs.
     st.caption(f"Period: {range_label}")
-    # Marker so the mobile CSS can collapse this 5-metric row into a 2-column grid.
-    st.markdown('<div data-kpi-row="true"></div>', unsafe_allow_html=True)
-    k = st.columns([0.7, 1.6, 1.6, 1.8, 1.7])
-    k[0].metric("Stocks", len(sdf))
-    k[1].metric("Median return", f"{median_ret:+.2f}%")
-    k[2].metric("Avg return",    f"{avg_ret:+.2f}%")
-    k[3].metric("Breadth",       f"{breadth_pct:.0f}% ({gainers}/{len(sdf)} up)")
-    k[4].metric("Total dollar volume", _fmt_dollar(total_dvol))
+    # One compact HTML grid (styles in app.py): a single row on desktop,
+    # two or three per row on phones.
+    kpis = [
+        ("Stocks", f"{len(sdf)}"),
+        ("Median return", f"{median_ret:+.2f}%"),
+        ("Avg return", f"{avg_ret:+.2f}%"),
+        ("Breadth", f"{breadth_pct:.0f}% ({gainers}/{len(sdf)} up)"),
+        ("Dollar volume", _fmt_dollar(total_dvol)),
+    ]
+    st.markdown(
+        '<div class="ma-kpis">'
+        + "".join(f"<div><small>{k}</small><b>{v}</b></div>" for k, v in kpis)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
 
@@ -260,7 +267,7 @@ def render_sector_synopsis(
 
     event = st.plotly_chart(
         fig,
-        use_container_width=True,
+        width="stretch",
         theme=None,
         on_select="rerun",
         key=f"sector_bar_{sector}",
@@ -292,13 +299,20 @@ def render_sector_synopsis(
                 f"Dollar volume: **${row['dollar_volume']:,.0f}**"
             )
             with st.spinner(f"Loading {clicked_symbol}..."):
-                df_ohlcv = get_ohlcv_cached(db_url, clicked_symbol, date_from, date_to)
+                df_ohlcv = get_ohlcv_cached(
+                    db_url,
+                    clicked_symbol,
+                    date_from - dt.timedelta(days=INDICATOR_WARMUP_DAYS),
+                    date_to,
+                )
             if df_ohlcv.empty:
                 st.warning("No price data in the selected range.")
             else:
                 st.plotly_chart(
-                    build_detail_fig(df_ohlcv, clicked_symbol, ["SMA 20", "SMA 50"]),
-                    use_container_width=True,
+                    build_detail_fig(
+                        df_ohlcv, clicked_symbol, ["SMA 20", "SMA 50"], view_from=date_from
+                    ),
+                    width="stretch",
                     theme=None,
                     config={"displayModeBar": False},
                 )

@@ -769,7 +769,7 @@ def render_ask_tab(
         chip_cols = st.columns(2)
         for i, ex in enumerate(EXAMPLE_QUESTIONS_DESKTOP):
             with chip_cols[i % 2]:
-                if st.button(ex, key=f"ask_ex_d_{i}", use_container_width=True):
+                if st.button(ex, key=f"ask_ex_d_{i}", width="stretch"):
                     st.session_state["_ask_pending_example"] = ex
                     st.rerun()
 
@@ -788,7 +788,7 @@ def render_ask_tab(
             unsafe_allow_html=True,
         )
         for i, ex in enumerate(EXAMPLE_QUESTIONS_MOBILE):
-            if st.button(ex, key=f"ask_ex_m_{i}", use_container_width=True):
+            if st.button(ex, key=f"ask_ex_m_{i}", width="stretch"):
                 st.session_state["_ask_pending_example"] = ex
                 st.rerun()
 
@@ -820,7 +820,7 @@ def render_ask_tab(
             '<div data-ask-clear-history="true"></div>',
             unsafe_allow_html=True,
         )
-        if st.button("Clear history", use_container_width=True):
+        if st.button("Clear history", width="stretch"):
             st.session_state.ask_history = []
             st.session_state.ask_last_ticker = None
             st.session_state.ask_recent_turns = []
@@ -831,7 +831,7 @@ def render_ask_tab(
             cached_total = stats["route"]["size"] + stats["ai_sql"]["size"]
             if st.button(
                 f"Clear AI cache ({cached_total})",
-                use_container_width=True,
+                width="stretch",
                 help=(
                     "Drop every cached LLM decision. The cache normally serves "
                     "repeat questions without an API call. Developer-only — "
@@ -1112,7 +1112,7 @@ def _render_history_entry(entry: dict, idx: int) -> None:
                 st.markdown(f"**A:** {narrative}")
 
             df = pd.DataFrame(r.rows, columns=r.columns)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width="stretch", hide_index=True)
 
             meta_parts = [f"{r.row_count} rows", f"{r.duration_ms} ms"]
             if r.truncated:

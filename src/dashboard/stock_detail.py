@@ -13,7 +13,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from src.dashboard.charts import build_compare_fig, build_detail_fig
+from src.dashboard.charts import INDICATOR_WARMUP_DAYS, build_compare_fig, build_detail_fig
 from src.dashboard.data import fetch_index_overlap, get_ohlcv_cached
 
 
@@ -101,7 +101,7 @@ def render_stock_detail(
                 st.caption("Each series rebased to 100 at the first bar of the date range.")
                 st.plotly_chart(
                     build_compare_fig(series, primary=compare_symbols[0]),
-                    use_container_width=True,
+                    width="stretch",
                     theme=None,
                     config={"displayModeBar": False},
                 )
@@ -153,13 +153,17 @@ def render_stock_detail(
             key="detail_indicators",
         )
 
+        # Load extra history so the overlays are complete from the first
+        # bar shown; the chart is trimmed back to the selected range.
+        warmup_from = date_from - dt.timedelta(days=INDICATOR_WARMUP_DAYS)
         with st.spinner(f"Loading {selected_symbol}…"):
-            df_ohlcv = get_ohlcv_cached(db_url, selected_symbol, date_from, date_to)
+            df_ohlcv = get_ohlcv_cached(db_url, selected_symbol, warmup_from, date_to)
 
-        if df_ohlcv.empty:
+        in_range = pd.to_datetime(df_ohlcv["date"]).dt.date >= date_from if not df_ohlcv.empty else None
+        if df_ohlcv.empty or not in_range.any():
             st.warning("No price data found for this symbol in the selected date range.")
         else:
-            _n = len(df_ohlcv)
+            _n = len(df_ohlcv)  # bars available to the indicators
             _needs = []
             if _n < 50 and "SMA 50" in active_indicators:
                 _needs.append("SMA 50: 50 bars")
@@ -173,12 +177,12 @@ def render_stock_detail(
                 _needs.append("ATR: 15 bars")
             if _needs:
                 st.warning(
-                    f"Only {_n} bars in range — some indicators need more data: "
-                    + ", ".join(_needs) + ". Extend the date range for complete signals."
+                    f"Only {_n} bars of history for {selected_symbol} — some "
+                    "indicators need more: " + ", ".join(_needs) + "."
                 )
             st.plotly_chart(
-                build_detail_fig(df_ohlcv, selected_symbol, active_indicators),
-                use_container_width=True,
+                build_detail_fig(df_ohlcv, selected_symbol, active_indicators, view_from=date_from),
+                width="stretch",
                 theme=None,
                 config={"displayModeBar": False},
             )

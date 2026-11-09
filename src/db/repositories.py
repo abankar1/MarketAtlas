@@ -130,10 +130,18 @@ def fetch_ohlcv(
         open, high, low, close, volume
     FROM public.daily_bars
     WHERE symbol = %(symbol)s
-      AND (ts AT TIME ZONE 'UTC')::date BETWEEN %(date_from)s AND %(date_to)s
+      AND ts >= %(ts_from)s AND ts < %(ts_to)s
     ORDER BY ts ASC
     """
-    return pd.read_sql(q, conn, params={"symbol": symbol, "date_from": date_from, "date_to": date_to})
+    # Same days as (ts AT TIME ZONE 'UTC')::date BETWEEN date_from AND
+    # date_to, but filtering on ts itself lets Postgres use the index.
+    utc = dt.timezone.utc
+    params = {
+        "symbol": symbol,
+        "ts_from": dt.datetime.combine(date_from, dt.time(), tzinfo=utc),
+        "ts_to": dt.datetime.combine(date_to + dt.timedelta(days=1), dt.time(), tzinfo=utc),
+    }
+    return pd.read_sql(q, conn, params=params)
 
 
 def upsert_asset(conn: psycopg.Connection, asset_row: dict[str, Any]) -> None:

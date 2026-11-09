@@ -1,8 +1,8 @@
 """
 Heatmap tab — treemap and ranked-table views.
 
-render_heatmap_tab(df, index_key, date_from, date_to, range_picker=...)
-    renders the full tab: time range + sector filter, movers strip, treemap.
+render_heatmap_tab(df, index_key, date_from, date_to)
+    renders the tab: sector filter, top movers, treemap.
     (Palette choice and the ranked-table view are hidden but kept below.)
 render_ranked_table(df, color_range)
     ranked table helper (symbol, name, sector, return %, percentile, volume).
@@ -11,9 +11,9 @@ render_ranked_table(df, color_range)
 from __future__ import annotations
 
 import datetime as dt
+import html
 import io
 import re
-from typing import Callable
 
 import pandas as pd
 import plotly.colors as pc
@@ -149,7 +149,7 @@ def render_ranked_table(
         f"{len(tdf)} symbols · sortable by any column · "
         "color scale matches the treemap"
     )
-    st.dataframe(styled, use_container_width=True)
+    st.dataframe(styled, width="stretch")
 
 
 # ---------------------------------------------------------------------------
@@ -205,70 +205,45 @@ def _build_export_csv(df: pd.DataFrame) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def _render_movers_strip(
-    df: pd.DataFrame,
-    color_range: tuple[float, float],  # retained for API compat; ignored
-    color_scale: str,
-    center_zero: bool,                   # retained for API compat; ignored
-) -> None:
+def _render_movers_strip(df: pd.DataFrame, color_scale) -> None:
     """
-    Compact two-row strip: top-N gainers (▲) and top-N losers (▼).
-
-    Each cell is a small card with a colored left-border chip, the ticker,
-    and the return % rendered in the palette colour matching the treemap
-    (percentile-rank within the visible df). N = min(5, len(df)).
+    Top-N gainers (▲) and losers (▼) as one HTML block: a CSS grid of small
+    cards (classes in app.py's stylesheet). Each card's colour matches the
+    treemap (percentile rank within the visible df). N = min(5, len(df)).
     """
     n = min(5, len(df))
     if n == 0:
         return
 
-    # Percentile rank — matches the treemap's color logic exactly
     if len(df) > 1:
         ranks = df["return_pct"].rank(method="average", pct=True) * 100
     else:
         ranks = pd.Series([50.0] * len(df), index=df.index)
     pct_by_symbol = dict(zip(df["symbol"], ranks))
 
-    def _color(percentile: float) -> str:
-        t = max(0.0, min(1.0, percentile / 100.0))
-        return pc.sample_colorscale(color_scale, [t])[0]
-
-    def _row(label: str, subset: pd.DataFrame, *, direction: str) -> None:
-        st.caption(label)
-        # Marker so the mobile CSS can keep all 5 cards in one
-        # horizontally-scrollable row instead of stacking them.
-        # `data-mover-row` distinguishes the upper (▲) and lower (▼) rows
-        # so CSS can apply different bottom-padding to each — the upper
-        # row sits above the ▼ caption (no chart), so it can be tighter,
-        # while the lower row sits above the heatmap chart and needs
-        # more padding to keep the bracket curves from being clipped.
-        st.markdown(
-            f'<div data-mover-strip="true" data-mover-row="{direction}"></div>',
-            unsafe_allow_html=True,
+    def card(row) -> str:
+        t = max(0.0, min(1.0, pct_by_symbol.get(row["symbol"], 50.0) / 100.0))
+        color = pc.sample_colorscale(color_scale, [t])[0]
+        return (
+            f'<div class="ma-card" style="--c:{color}">'
+            f'<b>{html.escape(str(row["symbol"]))}</b>'
+            f'<span>{row["return_pct"]:+.2f}%</span></div>'
         )
-        cols = st.columns(n)
-        for col, (_, row) in zip(cols, subset.iterrows()):
-            pct = row["return_pct"]
-            color = _color(pct_by_symbol.get(row["symbol"], 50.0))
-            sign = "+" if pct >= 0 else ""
-            col.markdown(
-                f'<div style="'
-                f"padding:6px 10px;"
-                f"border-radius:6px;"
-                f"border-left:4px solid {color};"
-                f"background:rgba(255,255,255,0.04);"
-                f'margin-bottom:2px">'
-                f'<div style="font-size:0.70em;color:#aaa;'
-                f'letter-spacing:0.05em;font-weight:600">'
-                f'{row["symbol"]}</div>'
-                f'<div style="font-size:0.95em;font-weight:700;color:{color}">'
-                f"{sign}{pct:.2f}%</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
 
-    _row(f"Top {n} ▲", df.nlargest(n, "return_pct"), direction="up")
-    _row(f"Top {n} ▼", df.nsmallest(n, "return_pct"), direction="down")
+    def row(label: str, subset: pd.DataFrame) -> str:
+        cards = "".join(card(r) for _, r in subset.iterrows())
+        return (
+            f'<div class="ma-movers-label">{label}</div>'
+            f'<div class="ma-movers-row">{cards}</div>'
+        )
+
+    st.markdown(
+        '<div class="ma-movers">'
+        + row(f"Top {n} ▲", df.nlargest(n, "return_pct"))
+        + row(f"Bottom {n} ▼", df.nsmallest(n, "return_pct"))
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -282,103 +257,55 @@ def render_heatmap_tab(
     date_from: dt.date | None = None,
     date_to: dt.date | None = None,
     size_by: str = "dollar_volume",
-    range_picker: Callable[[], None] | None = None,
 ) -> None:
-    """
-    Render the full Heatmap tab: time range + sector filter, movers strip,
-    treemap. `range_picker` draws the time-range dropdown (owned by app.py).
-    """
-    # ------------------------------------------------------------------
-    # Controls row — sector filter + color settings (one compact line)
-    # ------------------------------------------------------------------
+    """Render the Heatmap tab: sector filter, top movers, treemap."""
     all_sectors = sorted(df["group_name"].dropna().unique().tolist())
 
-    # Clamp any stale session values to sectors present in this universe
-    if "heatmap_sector_filter" not in st.session_state:
-        st.session_state["heatmap_sector_filter"] = []
-    _stored = st.session_state["heatmap_sector_filter"]
-    _clamped = [s for s in _stored if s in all_sectors]
-    if _clamped != _stored:
-        st.session_state["heatmap_sector_filter"] = _clamped
+    # Drop stale selections for sectors not in this universe.
+    stored = st.session_state.get("heatmap_sector_filter", [])
+    clamped = [s for s in stored if s in all_sectors]
+    if clamped != stored:
+        st.session_state["heatmap_sector_filter"] = clamped
 
-    if "heatmap_clip" not in st.session_state:
-        st.session_state["heatmap_clip"] = 50
+    selected_sectors = st.multiselect(
+        "Sectors",
+        options=all_sectors,
+        key="heatmap_sector_filter",
+        placeholder="All sectors",
+        label_visibility="collapsed",
+        width=460,
+    )
 
-    with st.expander("Options", expanded=False):
-        # Marker so the mobile CSS can collapse the column gap when the
-        # 3 controls wrap to 3 stacked rows on narrow viewports.
-        st.markdown('<div data-options-row="true"></div>', unsafe_allow_html=True)
-        _range_col, _f_col = st.columns([2, 3], gap="large")
-
-        if range_picker is not None:
-            with _range_col:
-                range_picker()
-        with _f_col:
-            selected_sectors = st.multiselect(
-                "Sectors",
-                options=all_sectors,
-                key="heatmap_sector_filter",
-                placeholder="All sectors",
-                label_visibility="collapsed",
-            )
-
-        # --- Palette selector + Treemap/Ranked Table toggle (hidden — the
-        #     heatmap is always a Finviz-style treemap now; restore these to
-        #     bring the choices back. render_ranked_table is still here.) ---
-        # color_scale = _PALETTE_OPTIONS[st.selectbox(
-        #     "Color palette", list(_PALETTE_OPTIONS.keys()),
-        #     key="color_palette", label_visibility="collapsed",
-        # )]
-        # view_toggle = st.radio(
-        #     "View", ["Treemap", "Ranked Table"],
-        #     key="heatmap_view_toggle", label_visibility="collapsed",
-        # )
+    # The palette selector and the Treemap / Ranked Table toggle are hidden:
+    # the heatmap is always a Finviz-style treemap. render_ranked_table and
+    # the other palettes in _PALETTE_OPTIONS are kept for re-enabling.
     color_scale = _PALETTE_OPTIONS[_DEFAULT_PALETTE]
-    view_toggle = "Treemap"
-
-        # --- Clip slider + Center-on-0 toggle (hidden — heatmap now colours
-        #     by percentile rank so these have no effect; uncomment to restore
-        #     absolute-return colouring with manual clip range) ---
-        # clip = st.slider(
-        #     "Clip ±%", min_value=1, max_value=100,
-        #     key="heatmap_clip", format="±%d%%",
-        # )
-        # center_zero = st.toggle("Center on 0%", value=True, key="center_zero")
-
-    # Percentile mode ignores these but keeps the call signature stable.
-    color_range = (0.0, 100.0)
-    center_zero = True
 
     if selected_sectors:
         df = df[df["group_name"].isin(selected_sectors)].copy()
-
     if df.empty:
-        st.info(
-            "No data for the selected sectors — clear the filter to see all symbols."
-        )
+        st.info("No data for the selected sectors — clear the filter to see all symbols.")
         return
 
-    if view_toggle == "Treemap":
-        # Prepare values column based on size_by mode
-        _values_col = "dollar_volume"
-        _plot_df = df
-        if size_by == "equal_weight":
-            _plot_df = df.assign(_size=1.0)
-            _values_col = "_size"
-        elif size_by == "magnitude":
-            _plot_df = df.assign(_size=df["return_pct"].abs().clip(lower=0.01))
-            _values_col = "_size"
+    plot_df, values_col = df, "dollar_volume"
+    if size_by == "equal_weight":
+        plot_df, values_col = df.assign(_size=1.0), "_size"
+    elif size_by == "magnitude":
+        plot_df = df.assign(_size=df["return_pct"].abs().clip(lower=0.01))
+        values_col = "_size"
 
-        _render_movers_strip(df, color_range, color_scale, center_zero)
-        fig = build_fig(
-            _plot_df,
-            color_range=color_range,
-            color_scale=color_scale,
-            center_zero=center_zero,
-            values_col=_values_col,
-        )
-        st.plotly_chart(fig, use_container_width=True, theme=None, config={"displayModeBar": False})
-    else:
-        render_ranked_table(
-            df, color_range, color_scale=color_scale, center_zero=center_zero
-        )
+    _render_movers_strip(df, color_scale)
+    st.markdown(
+        '<div class="ma-legend"><span>Worst</span><i></i><span>Best</span>'
+        '<span class="ma-legend-note">· color = return rank, size = dollar volume</span></div>',
+        unsafe_allow_html=True,
+    )
+    fig = build_fig(
+        plot_df,
+        color_range=(0.0, 100.0),
+        color_scale=color_scale,
+        values_col=values_col,
+    )
+    st.plotly_chart(
+        fig, width="stretch", theme=None, config={"displayModeBar": False}
+    )
