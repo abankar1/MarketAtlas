@@ -127,8 +127,8 @@ _AI_SQL_CACHE = TTLCache()
 # clear needed.
 # History:
 #   v1 (implicit, pre-version): original (ts AT TIME ZONE 'UTC')::date pattern.
-#   v2 (2026-05-09): switched to b.ts >= NOW() - INTERVAL '...' for chunk
-#       pruning; added 14-day filter on end_px CTEs.
+#   v2 (2026-05-09): switched to b.ts >= NOW() - INTERVAL '...' so date
+#       filters prune; added 14-day filter on end_px CTEs.
 #   v3 (2026-05-09): narrate prompt now refers to "tabs" explicitly
 #       (e.g. "See the **Stock Detail** tab"); Index Overlap removed from
 #       the tab list since that tab is hidden from the strip.
@@ -140,7 +140,9 @@ _AI_SQL_CACHE = TTLCache()
 #   v5 (2026-05-09): CANNOT_ANSWER detail strings are now sentence-case
 #       (capitalised first letter, terminating period). Few-shot examples
 #       updated and a Python post-processor enforces the format.
-PROMPT_VERSION = "v5"
+#   v6 (2026-11-09): SQL prompt describes the database as plain PostgreSQL;
+#       the date-filter rule is reworded without vendor-specific terms.
+PROMPT_VERSION = "v6"
 
 
 # ---------------------------------------------------------------------------

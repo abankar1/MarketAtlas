@@ -233,6 +233,24 @@ def fetch_available_date_bounds(
     return df.loc[0, "min_day"], df.loc[0, "max_day"]
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_previous_trading_day(db_url: str, before: dt.date) -> dt.date | None:
+    """
+    Latest trading day strictly before `before` (skips weekends/holidays).
+    Used by the "24 hours" range so it spans the last two closes.
+    """
+    q = """
+    SELECT (max(ts) AT TIME ZONE 'UTC')::date
+    FROM public.daily_bars
+    WHERE ts <  (%(d)s::date)::timestamp AT TIME ZONE 'UTC'
+      AND ts >= (%(d)s::date - 14)::timestamp AT TIME ZONE 'UTC'
+    """
+    with connect(db_url) as conn, conn.cursor() as cur:
+        cur.execute(q, {"d": before})
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
 # ---------------------------------------------------------------------------
 # Session-level LRU cache — treemap data
 # ---------------------------------------------------------------------------

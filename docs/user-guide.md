@@ -2,7 +2,7 @@
 
 Market Atlas is a market intelligence dashboard for tracking price performance
 across the S&P 500, NASDAQ-100, and Dow 30. It pulls historical and daily price
-data from Marketstack, stores it in a local TimescaleDB database, and surfaces
+data from Marketstack, stores it in a PostgreSQL database, and surfaces
 it through an interactive Streamlit dashboard.
 
 ---
@@ -38,7 +38,7 @@ It opens at `http://localhost:8501`.
 Choose which index to look at: S&P 500, NASDAQ-100, Dow 30, or All (combined, deduplicated). Defaults to All.
 
 **Quick range**
-Pick a preset time window: Past 3 months (default), Past 6 months, Past 1 year, Past 2 years, or YTD. If you manually adjust the date pickers after choosing a preset, the preset highlight clears to indicate a custom range.
+Pick a preset time window: Past week (default), Past 3 months, Past 6 months, Past 1 year, Past 2 years, or YTD. If you manually adjust the date pickers after choosing a preset, the preset highlight clears to indicate a custom range. The Heatmap's time-range dropdown (below) changes the same range, so the two always agree.
 
 **Start date / End date**
 The date pickers are bounded to the earliest and latest bar dates actually in your database for the selected universe.
@@ -46,7 +46,7 @@ The date pickers are bounded to the earliest and latest bar dates actually in yo
 **Cache**
 Shows how many query results are cached in the current session (hits, misses, slots used) for the treemap, OHLCV, and news caches. All three use a shared 12-hour TTL — long enough to keep API/DB usage low (Marketaux free tier is 100 requests/day), short enough that a dashboard left open overnight refreshes data on first use.
 
-UI preferences (index, palette, date preset, indicator selection) are automatically saved to `~/.marketatlas/prefs.json` and restored the next time you open the dashboard.
+UI preferences (index, indicator selection) are automatically saved to `~/.marketatlas/prefs.json` and restored the next time you open the dashboard.
 
 ---
 
@@ -59,15 +59,13 @@ Above the treemap, a compact strip shows the top 5 gainers (▲) and top 5 loser
 
 **Options panel**
 Click the **Options** arrow to expand display controls:
-- *View* — switch between Treemap and Ranked Table
+- *Time range* — 24 hours (the last two closes), 1 week (default), 1 month, 3 months, 6 months, 1 year, or **Custom**, which opens a calendar: pick a start date, then an end date, and the range applies. While a custom range is active the dropdown shows its dates. The range applies to every tab.
 - *Sectors* — filter to one or more GICS sectors (empty = all sectors)
-- *Color palette* — Finviz-style (default — dark red → grey → dark green, no yellow), RdYlGn, RdBu (colorblind-safe), or Viridis (sequential)
+
+Tiles use a Finviz-style palette (dark red → grey → dark green, no yellow).
 
 **Treemap**
 Rectangles are grouped by GICS sector. Hover a stock for return %, percentile, start/end close, and dollar volume. Hover a sector parent for the dollar-volume-weighted return and average start/end close, plus the stock count and total dollar volume for the sector.
-
-**Ranked Table**
-Sortable table with all symbols ranked by return %, with background-coloured return cells matching the treemap palette, and a percentile bar column.
 
 ---
 

@@ -1,8 +1,9 @@
 """
 Heatmap tab — treemap and ranked-table views.
 
-render_heatmap_tab(df, index_key, date_from, date_to)
-    renders the full tab: sector filter, color controls, movers strip, treemap or ranked table.
+render_heatmap_tab(df, index_key, date_from, date_to, range_picker=...)
+    renders the full tab: time range + sector filter, movers strip, treemap.
+    (Palette choice and the ranked-table view are hidden but kept below.)
 render_ranked_table(df, color_range)
     ranked table helper (symbol, name, sector, return %, percentile, volume).
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import re
+from typing import Callable
 
 import pandas as pd
 import plotly.colors as pc
@@ -68,6 +70,7 @@ _PALETTE_OPTIONS: dict[str, object] = {
     "RdBu (colorblind-safe)": "RdBu",
     "Viridis (sequential)":   "Viridis",
 }
+_DEFAULT_PALETTE = "Finviz-style (default)"
 
 
 def render_ranked_table(
@@ -279,8 +282,12 @@ def render_heatmap_tab(
     date_from: dt.date | None = None,
     date_to: dt.date | None = None,
     size_by: str = "dollar_volume",
+    range_picker: Callable[[], None] | None = None,
 ) -> None:
-    """Render the full Heatmap tab: sector filter, color controls, movers strip, view toggle, treemap or ranked table."""
+    """
+    Render the full Heatmap tab: time range + sector filter, movers strip,
+    treemap. `range_picker` draws the time-range dropdown (owned by app.py).
+    """
     # ------------------------------------------------------------------
     # Controls row — sector filter + color settings (one compact line)
     # ------------------------------------------------------------------
@@ -297,23 +304,15 @@ def render_heatmap_tab(
     if "heatmap_clip" not in st.session_state:
         st.session_state["heatmap_clip"] = 50
 
-    # Drop stale palette session value so the selectbox doesn't error if a
-    # user's saved pref refers to a renamed option.
-    if st.session_state.get("color_palette") not in _PALETTE_OPTIONS:
-        st.session_state.pop("color_palette", None)
-    # Same migration for the view toggle: the displayed labels are still
-    # "Treemap"/"Ranked Table" in Python; mobile CSS just swaps the visible text.
-    if st.session_state.get("heatmap_view_toggle") in ("Map", "Table"):
-        st.session_state["heatmap_view_toggle"] = (
-            "Treemap" if st.session_state["heatmap_view_toggle"] == "Map" else "Ranked Table"
-        )
-
     with st.expander("Options", expanded=False):
         # Marker so the mobile CSS can collapse the column gap when the
         # 3 controls wrap to 3 stacked rows on narrow viewports.
         st.markdown('<div data-options-row="true"></div>', unsafe_allow_html=True)
-        _view_col, _f_col, _pal_col = st.columns([2, 3, 3], gap="large")
+        _range_col, _f_col = st.columns([2, 3], gap="large")
 
+        if range_picker is not None:
+            with _range_col:
+                range_picker()
         with _f_col:
             selected_sectors = st.multiselect(
                 "Sectors",
@@ -322,20 +321,20 @@ def render_heatmap_tab(
                 placeholder="All sectors",
                 label_visibility="collapsed",
             )
-        color_scale = _PALETTE_OPTIONS[
-            _pal_col.selectbox(
-                "Color palette",
-                list(_PALETTE_OPTIONS.keys()),
-                key="color_palette",
-                label_visibility="collapsed",
-            )
-        ]
-        view_toggle = _view_col.radio(
-            "View",
-            ["Treemap", "Ranked Table"],
-            key="heatmap_view_toggle",
-            label_visibility="collapsed",
-        )
+
+        # --- Palette selector + Treemap/Ranked Table toggle (hidden — the
+        #     heatmap is always a Finviz-style treemap now; restore these to
+        #     bring the choices back. render_ranked_table is still here.) ---
+        # color_scale = _PALETTE_OPTIONS[st.selectbox(
+        #     "Color palette", list(_PALETTE_OPTIONS.keys()),
+        #     key="color_palette", label_visibility="collapsed",
+        # )]
+        # view_toggle = st.radio(
+        #     "View", ["Treemap", "Ranked Table"],
+        #     key="heatmap_view_toggle", label_visibility="collapsed",
+        # )
+    color_scale = _PALETTE_OPTIONS[_DEFAULT_PALETTE]
+    view_toggle = "Treemap"
 
         # --- Clip slider + Center-on-0 toggle (hidden — heatmap now colours
         #     by percentile rank so these have no effect; uncomment to restore
