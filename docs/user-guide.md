@@ -34,7 +34,7 @@ It opens at `http://localhost:8501`.
 
 ### Filters
 
-Two dropdowns at the top of every tab apply everywhere. On the Heatmap they sit to the right of the Sectors filter (on phones, on the line below it):
+Two dropdowns at the top of the Heatmap, Sector Synopsis, Stock Detail and News tabs set what those tabs show. On the Heatmap they sit to the right of the Sectors filter (on phones, on the line below it). Ask AI doesn't use them: name the index and period in your question instead.
 
 **Index**
 All indexes (combined, deduplicated; the default), S&P 500, NASDAQ-100, or Dow 30.

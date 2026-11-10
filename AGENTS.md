@@ -318,19 +318,21 @@ tabs = st.tabs(_TABS, key="active_tab", default=_TABS[0],
 
 ### Filter row and time range
 
-Each tab starts with one filter row (`_render_filter_row`, a horizontal
-`st.container(key="filter_row")`): on the Heatmap the sector multiselect comes
-first, then index and time range; the other tabs show just index and time
-range. The row is drawn before the tab loads its data, so it stays in place
+Each tab except Ask AI starts with one filter row (`_render_filter_row`, a
+horizontal `st.container(key="filter_row")`): on the Heatmap the sector
+multiselect comes first, then index and time range; Sector Synopsis, Stock
+Detail and News show just index and time range. Ask AI has no filter row,
+since questions carry their own index and dates. The row is drawn before the tab loads its data, so it stays in place
 under the loading spinner. Sector options come from the cached
 `fetch_index_overlap` (`_sector_options`), not from the price data. On phones,
 CSS on the widgets' `st-key-*` classes puts sectors on its own line and index
 + time range side by side. Both selectboxes use `filter_mode=None` so phones
 don't open a keyboard.
 
-The sector multiselect is only drawn on the Heatmap, so `main()` re-assigns
-`st.session_state["heatmap_sector_filter"]` at the top of each run; otherwise
-Streamlit drops a widget's state on runs where it isn't drawn. Selections not
+The sector multiselect is only drawn on the Heatmap and the index dropdown
+not on Ask AI, so `main()` re-assigns `st.session_state["heatmap_sector_filter"]`
+and `["index_choice"]` at the top of each run; otherwise Streamlit drops a
+widget's state on runs where it isn't drawn. Selections not
 in the current universe are dropped before the widget renders.
 
 The range lives in plain session keys, not widget keys: `range_preset`
