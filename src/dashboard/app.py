@@ -401,9 +401,9 @@ def _sector_options(db_url: str, index_key: str) -> list[str]:
 
 def _render_filter_row(span_label: str, sector_options: list[str] | None = None) -> None:
     """
-    One row at the top of each tab: the Heatmap's sector filter (when
-    `sector_options` is given), then index universe and time range.
-    Index and time range apply to every tab.
+    One row at the top of each tab except Ask AI: the Heatmap's sector
+    filter (when `sector_options` is given), then index universe and time
+    range. Index and time range apply to every tab that shows them.
     """
     options = list(_DATE_PRESETS)
     if _current_range_choice() == _CUSTOM_ACTIVE:
@@ -545,10 +545,12 @@ def main() -> None:
 
     span_label = _fmt_span(date_from, date_to)
 
-    # The sector filter is only drawn on the Heatmap tab; re-assigning its
-    # value keeps Streamlit from dropping it while another tab is open.
-    if "heatmap_sector_filter" in st.session_state:
-        st.session_state["heatmap_sector_filter"] = st.session_state["heatmap_sector_filter"]
+    # Some filters aren't drawn on every tab (sectors only on the Heatmap,
+    # none on Ask AI). Streamlit drops a widget's value on runs where it
+    # isn't drawn; re-assigning it here keeps the selection across tabs.
+    for key in ("index_choice", "heatmap_sector_filter"):
+        if key in st.session_state:
+            st.session_state[key] = st.session_state[key]
 
     if _DEVELOPER_MODE:
         _render_dev_sidebar()
@@ -582,10 +584,12 @@ def main() -> None:
             continue
         with tab:
             # Filter row first, so it stays put while the data loads below it.
-            _render_filter_row(
-                span_label,
-                _sector_options(db_url, index_key) if name == "Heatmap" else None,
-            )
+            # Ask AI has none: questions carry their own index and dates.
+            if name != "Ask AI":
+                _render_filter_row(
+                    span_label,
+                    _sector_options(db_url, index_key) if name == "Heatmap" else None,
+                )
 
             if name == "Ask AI":
                 ai_client = None
