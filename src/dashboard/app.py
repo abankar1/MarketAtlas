@@ -4,7 +4,8 @@ Market Atlas — Streamlit dashboard entry point.
 Responsibilities of this file:
   - Page config and the global stylesheet (kept small on purpose)
   - Configuration loading (db_url, etc.)
-  - Header + filter bar: index universe and time range (incl. Custom dialog)
+  - Header, tabs, and the filter row at the top of each tab: index universe,
+    time range (incl. Custom dialog), plus the sector filter on the Heatmap
   - Tab navigation (native st.tabs; only the open tab's code runs)
   - Usage-event logging
 
@@ -45,6 +46,7 @@ from src.dashboard.data import (  # noqa: E402
     _get_ohlcv_cache,
     _get_session_cache,
     fetch_available_date_bounds,
+    fetch_index_overlap,
     fetch_previous_trading_day,
     get_treemap_data_cached,
 )
@@ -128,6 +130,19 @@ a[href*="chat.openai.com/?q="] { display: none !important; }
 .block-container { padding-top: 2rem; padding-bottom: 2rem; }
 h1 { padding-top: 0 !important; padding-bottom: 0 !important; }
 
+/* Time range: tinted in the accent colour (same as the active tab) so the
+   period being shown stands out. */
+.st-key-range_choice [role="group"] {
+  background: rgba(197, 57, 72, 0.08) !important;
+  border-color: rgba(197, 57, 72, 0.55) !important;
+  color: #c53948 !important;
+}
+.st-key-range_choice input {
+  color: #c53948 !important;
+  -webkit-text-fill-color: #c53948;
+  font-weight: 600 !important;
+}
+
 /* Heatmap: top movers */
 .ma-movers { display: grid; gap: 0.3rem; margin-bottom: 0.25rem; }
 .ma-movers-label { font-size: 0.75rem; opacity: 0.65; }
@@ -142,10 +157,14 @@ h1 { padding-top: 0 !important; padding-bottom: 0 !important; }
   display: block; font-size: 0.7rem; letter-spacing: 0.04em; opacity: 0.7;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ma-card span {
-  display: block; font-size: 0.95rem; font-weight: 700; color: var(--c);
+.ma-card .ma-px {
+  display: block; font-size: 0.95rem; font-weight: 600; white-space: nowrap;
+}
+.ma-card .ma-chg {
+  display: block; font-size: 0.85rem; font-weight: 700; color: var(--c);
   white-space: nowrap;
 }
+.ma-card .ma-chg em { font-style: normal; font-weight: 500; margin-left: 0.4rem; }
 
 /* Heatmap: colour key (replaces Plotly's colorbar, which ate a third of
    the width on phones) */
@@ -170,12 +189,22 @@ h1 { padding-top: 0 !important; padding-bottom: 0 !important; }
   .block-container { padding: 1rem 0.75rem 1.5rem; }
   h1 { font-size: 1.6rem !important; }
   .ma-legend-note { display: none; }
+  /* Filter row: sectors on its own line, index + time range share the next. */
+  .st-key-filter_row .st-key-heatmap_sector_filter {
+    flex: 1 1 100% !important; width: 100% !important; max-width: 100% !important;
+  }
+  .st-key-filter_row .st-key-index_choice,
+  .st-key-filter_row .st-key-range_choice {
+    flex: 1 1 0 !important; width: auto !important; min-width: 0 !important;
+  }
   .ma-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ma-kpis b { font-size: 1.2rem; }
   .ma-movers-row { gap: 0.25rem; }
   .ma-card { padding: 0.25rem 0.35rem; }
   .ma-card b { font-size: 0.6rem; }
-  .ma-card span { font-size: 0.75rem; }
+  .ma-card .ma-px { font-size: 0.72rem; }
+  .ma-card .ma-chg { font-size: 0.68rem; }
+  .ma-card .ma-chg em { display: block; margin-left: 0; }
 }
 </style>
 """
@@ -362,10 +391,20 @@ def _on_tab_change(db_url: str = "") -> None:
 # Page sections
 # ---------------------------------------------------------------------------
 
-def _render_filter_bar(
-    min_day: dt.date, end_max_day: dt.date, prev_day: dt.date | None, span_label: str
-) -> None:
-    """Index universe + time range, above the tabs and visible on every tab."""
+def _sector_options(db_url: str, index_key: str) -> list[str]:
+    """Sectors present in the selected universe (from the cached membership data)."""
+    members = fetch_index_overlap(db_url)
+    if index_key != "all":
+        members = members[members[f"in_{index_key}"]]
+    return sorted(members["sector"].dropna().unique().tolist())
+
+
+def _render_filter_row(span_label: str, sector_options: list[str] | None = None) -> None:
+    """
+    One row at the top of each tab: the Heatmap's sector filter (when
+    `sector_options` is given), then index universe and time range.
+    Index and time range apply to every tab.
+    """
     options = list(_DATE_PRESETS)
     if _current_range_choice() == _CUSTOM_ACTIVE:
         options.append(_CUSTOM_ACTIVE)
@@ -383,13 +422,29 @@ def _render_filter_bar(
             return "Custom…"
         return _DATE_PRESETS[opt][1]
 
-    with st.container(horizontal=True, wrap=False, width=460, key="filter_bar"):
+    with st.container(horizontal=True, gap="small", key="filter_row"):
+        if sector_options is not None:
+            # Drop selections that aren't in this universe (e.g. after
+            # switching index) before the widget validates them.
+            stored = st.session_state.get("heatmap_sector_filter", [])
+            kept = [s for s in stored if s in sector_options]
+            if kept != stored:
+                st.session_state["heatmap_sector_filter"] = kept
+            st.multiselect(
+                "Sectors",
+                options=sector_options,
+                key="heatmap_sector_filter",
+                placeholder="All sectors",
+                label_visibility="collapsed",
+                width=460,
+            )
         st.selectbox(
             "Index",
             list(INDEX_OPTIONS),
             key="index_choice",
             label_visibility="collapsed",
             filter_mode=None,   # no typing, so phones don't open a keyboard
+            width=200,
         )
         st.selectbox(
             "Time range",
@@ -399,11 +454,8 @@ def _render_filter_bar(
             on_change=_on_range_change,
             label_visibility="collapsed",
             filter_mode=None,
+            width=240,
         )
-
-    if st.session_state.pop("_custom_dialog_open", False):
-        current = _resolve_range(min_day, end_max_day, prev_day)[:2]
-        _custom_range_dialog(min_day, end_max_day, current)
 
 
 def _render_dev_sidebar() -> None:
@@ -491,7 +543,12 @@ def main() -> None:
     st.session_state.setdefault("range_preset", _DEFAULT_PRESET)
     date_from, date_to, range_label = _resolve_range(min_day, end_max_day, prev_day)
 
-    _render_filter_bar(min_day, end_max_day, prev_day, _fmt_span(date_from, date_to))
+    span_label = _fmt_span(date_from, date_to)
+
+    # The sector filter is only drawn on the Heatmap tab; re-assigning its
+    # value keeps Streamlit from dropping it while another tab is open.
+    if "heatmap_sector_filter" in st.session_state:
+        st.session_state["heatmap_sector_filter"] = st.session_state["heatmap_sector_filter"]
 
     if _DEVELOPER_MODE:
         _render_dev_sidebar()
@@ -524,6 +581,12 @@ def main() -> None:
         if not tab.open:
             continue
         with tab:
+            # Filter row first, so it stays put while the data loads below it.
+            _render_filter_row(
+                span_label,
+                _sector_options(db_url, index_key) if name == "Heatmap" else None,
+            )
+
             if name == "Ask AI":
                 ai_client = None
                 if anthropic_api_key:
@@ -547,13 +610,23 @@ def main() -> None:
             if df is None:
                 continue
             if name == "Heatmap":
-                render_heatmap_tab(df, index_key, date_from, date_to)
+                render_heatmap_tab(
+                    df, index_key, date_from, date_to,
+                    sectors=st.session_state.get("heatmap_sector_filter", []),
+                    # Phones can't hover, so print price + return on the tiles.
+                    tile_values=bool(_get_session_device()[1]),
+                )
             elif name == "Sector Synopsis":
                 render_sector_synopsis_tab(df, range_label, db_url, date_from, date_to)
             elif name == "Stock Detail":
                 render_stock_detail(df, db_url, date_from, date_to)
             elif name == "News":
                 render_news_tab(df, marketaux_token)
+
+    # Opened outside the tab containers; "Custom…" in the time-range
+    # dropdown sets the flag in its on_change callback.
+    if st.session_state.pop("_custom_dialog_open", False):
+        _custom_range_dialog(min_day, end_max_day, (date_from, date_to))
 
 
 if __name__ == "__main__":
