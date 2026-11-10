@@ -32,9 +32,9 @@ It opens at `http://localhost:8501`.
 
 ---
 
-### Filter bar
+### Filters
 
-Two dropdowns above the tabs apply to every tab:
+Two dropdowns at the top of every tab apply everywhere. On the Heatmap they sit to the right of the Sectors filter (on phones, on the line below it):
 
 **Index**
 All indexes (combined, deduplicated; the default), S&P 500, NASDAQ-100, or Dow 30.
@@ -51,15 +51,15 @@ The header line under the title shows how fresh the prices are ("Prices as of Fr
 The main view. Every stock in the selected universe appears as a rectangle sized by its dollar volume. Tiles are colored by **percentile rank** of return % within the visible universe — worst performer red, best green — so a single outlier (e.g. a +300% mover) doesn't wash everything else into the same boundary colour. A small **Worst → Best** key sits above the treemap.
 
 **Top movers strip**
-Above the treemap, a compact strip shows the top 5 gainers (▲) and bottom 5 (▼) for a quick read on the extremes.
+Above the treemap, a compact strip shows the top 5 gainers (▲) and bottom 5 (▼), each with its latest close and its change over the selected range in percent and dollars.
 
 **Sectors**
-The dropdown at the top of the tab filters to one or more GICS sectors (empty = all sectors).
+The first dropdown in the filter row narrows the heatmap to one or more GICS sectors (empty = all sectors). The choice is kept while you visit other tabs.
 
 Tiles use a Finviz-style palette (dark red → grey → dark green, no yellow).
 
 **Treemap**
-Rectangles are grouped by GICS sector. Hover a stock for return %, percentile, start/end close, and dollar volume. Hover a sector parent for the dollar-volume-weighted return and average start/end close, plus the stock count and total dollar volume for the sector.
+Rectangles are grouped by GICS sector. Hover a stock for return %, percentile, start/end close, and dollar volume. Hover a sector parent for the dollar-volume-weighted return and average start/end close, plus the stock count and total dollar volume for the sector. On phones, where hovering isn't possible, each tile shows the stock's price and % change instead; tap a sector to zoom in on its smaller stocks.
 
 ---
 

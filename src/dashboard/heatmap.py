@@ -2,7 +2,7 @@
 Heatmap tab — treemap and ranked-table views.
 
 render_heatmap_tab(df, index_key, date_from, date_to)
-    renders the tab: sector filter, top movers, treemap.
+    renders the tab: top movers and treemap (the sector dropdown is drawn by app.py).
     (Palette choice and the ranked-table view are hidden but kept below.)
 render_ranked_table(df, color_range)
     ranked table helper (symbol, name, sector, return %, percentile, volume).
@@ -19,7 +19,7 @@ import pandas as pd
 import plotly.colors as pc
 import streamlit as st
 
-from src.dashboard.charts import build_fig
+from src.dashboard.charts import build_fig, fmt_usd
 
 
 # ---------------------------------------------------------------------------
@@ -208,8 +208,10 @@ def _build_export_csv(df: pd.DataFrame) -> bytes:
 def _render_movers_strip(df: pd.DataFrame, color_scale) -> None:
     """
     Top-N gainers (▲) and losers (▼) as one HTML block: a CSS grid of small
-    cards (classes in app.py's stylesheet). Each card's colour matches the
-    treemap (percentile rank within the visible df). N = min(5, len(df)).
+    cards (classes in app.py's stylesheet), each with the ticker, the latest
+    close, and the change over the range in % and dollars. Each card's colour
+    matches the treemap (percentile rank within the visible df).
+    N = min(5, len(df)).
     """
     n = min(5, len(df))
     if n == 0:
@@ -224,10 +226,13 @@ def _render_movers_strip(df: pd.DataFrame, color_scale) -> None:
     def card(row) -> str:
         t = max(0.0, min(1.0, pct_by_symbol.get(row["symbol"], 50.0) / 100.0))
         color = pc.sample_colorscale(color_scale, [t])[0]
+        change = row["end_close"] - row["start_close"]
         return (
             f'<div class="ma-card" style="--c:{color}">'
             f'<b>{html.escape(str(row["symbol"]))}</b>'
-            f'<span>{row["return_pct"]:+.2f}%</span></div>'
+            f'<span class="ma-px">{fmt_usd(row["end_close"])}</span>'
+            f'<span class="ma-chg">{row["return_pct"]:+.2f}%'
+            f"<em>{fmt_usd(change, signed=True)}</em></span></div>"
         )
 
     def row(label: str, subset: pd.DataFrame) -> str:
@@ -257,24 +262,16 @@ def render_heatmap_tab(
     date_from: dt.date | None = None,
     date_to: dt.date | None = None,
     size_by: str = "dollar_volume",
+    sectors: list[str] | None = None,
+    tile_values: bool = False,
 ) -> None:
-    """Render the Heatmap tab: sector filter, top movers, treemap."""
-    all_sectors = sorted(df["group_name"].dropna().unique().tolist())
-
-    # Drop stale selections for sectors not in this universe.
-    stored = st.session_state.get("heatmap_sector_filter", [])
-    clamped = [s for s in stored if s in all_sectors]
-    if clamped != stored:
-        st.session_state["heatmap_sector_filter"] = clamped
-
-    selected_sectors = st.multiselect(
-        "Sectors",
-        options=all_sectors,
-        key="heatmap_sector_filter",
-        placeholder="All sectors",
-        label_visibility="collapsed",
-        width=460,
-    )
+    """
+    Render the Heatmap tab: top movers and treemap for `sectors` (all when
+    empty). The sector dropdown itself is drawn by app.py in the filter row.
+    `tile_values` prints price and return % on the tiles (phones, which
+    can't hover).
+    """
+    selected_sectors = sectors or []
 
     # The palette selector and the Treemap / Ranked Table toggle are hidden:
     # the heatmap is always a Finviz-style treemap. render_ranked_table and
@@ -297,7 +294,9 @@ def render_heatmap_tab(
     _render_movers_strip(df, color_scale)
     st.markdown(
         '<div class="ma-legend"><span>Worst</span><i></i><span>Best</span>'
-        '<span class="ma-legend-note">· color = return rank, size = dollar volume</span></div>',
+        '<span class="ma-legend-note">· color = return rank, size = dollar volume</span>'
+        + ('<span>· tap a sector to zoom in</span>' if tile_values else "")
+        + "</div>",
         unsafe_allow_html=True,
     )
     fig = build_fig(
@@ -305,6 +304,7 @@ def render_heatmap_tab(
         color_range=(0.0, 100.0),
         color_scale=color_scale,
         values_col=values_col,
+        tile_values=tile_values,
     )
     st.plotly_chart(
         fig, width="stretch", theme=None, config={"displayModeBar": False}
