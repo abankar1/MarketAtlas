@@ -28,12 +28,21 @@ from src.dashboard.indicators import (
 # Heatmap treemap
 # ---------------------------------------------------------------------------
 
+def fmt_usd(value: float, signed: bool = False) -> str:
+    """'$1,234' from 1,000 up, '$123.45' below; signed adds '+' / '-'."""
+    sign = ("+" if value >= 0 else "-") if signed else ("-" if value < 0 else "")
+    amount = abs(value)
+    body = f"{amount:,.0f}" if amount >= 1000 else f"{amount:,.2f}"
+    return f"{sign}${body}"
+
+
 def build_fig(
     df: pd.DataFrame,
     color_range: tuple[float, float],  # retained for API compat; ignored
     color_scale: str = "RdYlGn",
     center_zero: bool = True,           # retained for API compat; ignored
     values_col: str = "dollar_volume",
+    tile_values: bool = False,
 ) -> go.Figure:
     """
     Build the treemap colored by percentile rank of return % (0 = worst,
@@ -51,6 +60,9 @@ def build_fig(
     values_col     Column used to size tiles ('dollar_volume', '_size' for
                    equal-weight or magnitude modes).
     color_scale    Any Plotly named colorscale ('RdYlGn', 'RdBu', 'Viridis', …)
+    tile_values    Also print each stock's price and return % on its tile
+                   (for phones, where hovering isn't possible). Tiles too small
+                   for the text show none; tapping a sector zooms in.
     """
     df = df.copy()
     if len(df) > 1:
@@ -117,6 +129,19 @@ def build_fig(
     ]
     customdata = sector_custom + leaf_custom
 
+    tile_text = {}
+    if tile_values:
+        tile_text = dict(
+            text=[
+                f"{r['group_name']} {r['return_pct']:+.2f}%" for _, r in sector_agg.iterrows()
+            ]
+            + [
+                f"<b>{row.symbol}</b><br>{fmt_usd(row.end_close)}<br>{row.return_pct:+.2f}%"
+                for row in df.itertuples()
+            ],
+            texttemplate="%{text}",
+        )
+
     _SEQUENTIAL = {"Viridis", "Plasma", "Inferno", "Magma", "Cividis"}
     is_sequential = isinstance(color_scale, str) and color_scale in _SEQUENTIAL
     midpoint = None if is_sequential else 50.0
@@ -129,6 +154,7 @@ def build_fig(
             values=values,
             branchvalues="total",
             customdata=customdata,
+            **tile_text,
             marker=dict(
                 colors=colors,
                 colorscale=color_scale,

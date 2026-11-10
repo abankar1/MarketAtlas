@@ -225,9 +225,9 @@ A managed deployment stack is documented in [docs/deployment.md](docs/deployment
 - **Neon** (managed Postgres, free tier) holds the data
 - **GitHub Actions** (`.github/workflows/daily-update.yml`) runs `python -m src.main` on a cron schedule (Tue–Sat 09:00 UTC, after each trading day) so the cloud DB stays current
 
-Five tabs, all driven by the same filter bar (index + time range) above them:
+Five tabs, each with a filter row at the top (index + time range; the Heatmap adds a sector filter in front):
 
-- **Heatmap** — treemap tiles sized by dollar volume, colored by **percentile rank** of return % within the visible universe (Worst / Median / Best); sector filter; Finviz-style palette; top-5 / bottom-5 movers strip (▲/▼); sector parents show dollar-volume-weighted return + avg start/end close on hover
+- **Heatmap** — treemap tiles sized by dollar volume, colored by **percentile rank** of return % within the visible universe (Worst / Median / Best); sector filter; Finviz-style palette; top-5 / bottom-5 movers strip (▲/▼) with price and % / $ change; on phones the tiles show price and % change (no hover on touch screens); sector parents show dollar-volume-weighted return + avg start/end close on hover
 - **Ask AI** — natural-language query tab. Type a question in plain English ("Which Health Care stocks in the S&P 500 are up more than 10% in the last 30 days?"). Claude first tries to route the question to one of the pre-approved SQL templates in [src/ai/query_templates.py](src/ai/query_templates.py); if no template matches, it falls back to free-form `SELECT` generation. Multi-turn memory carries the last few turns so follow-ups like "their names" or "what about volume?" resolve. Both paths run on a separate read-only Postgres role with a 15-second statement timeout and a 1,000-row cap. Every question is logged to `nl_queries`. Requires `db_url_readonly` and `anthropic_api_key` in config; see the **Ask AI tab setup** section below.
 - **Sector Synopsis** — sector breadth bar chart (click to drill in); ranked per-stock bar chart; auto-selects the top-performing sector on load
 - **Stock Detail** — full per-stock candlestick with toggleable overlays (SMA 20/50, EMA 20, Bollinger Bands, RSI, MACD, ATR, OBV); index membership badges; Compare mode for normalized multi-symbol performance comparison (up to 5 symbols); defaults to AAPL
@@ -235,7 +235,7 @@ Five tabs, all driven by the same filter bar (index + time range) above them:
 
 > An **Index Overlap** view exists in the codebase (`src/dashboard/index_overlap.py`) but is currently hidden from the tab strip. Re-enable it by adding `"Index Overlap"` back into `_TABS` in [src/dashboard/app.py](src/dashboard/app.py).
 
-Filter bar (above the tabs, on every tab):
+Filter row (top of every tab):
 - Index: All indexes (default) | S&P 500 | NASDAQ-100 | Dow 30
 - Time range: 24 hours | 1 week (default) | 1 month | 3 months | 6 months | 1 year | Custom… (calendar for start and end dates)
 
@@ -336,7 +336,7 @@ Market Atlas/
 │   │   ├── daily_bar_importer.py       # incremental OHLCV importer
 │   │   └── sector_classifier.py        # GICS sector classification (Claude API)
 │   ├── dashboard/
-│   │   ├── app.py                      # Streamlit entry point — filter bar, tabs, lifecycle logging
+│   │   ├── app.py                      # Streamlit entry point — tabs, filter row, lifecycle logging
 │   │   ├── data.py                     # DB queries + LRU caches
 │   │   ├── charts.py                   # Plotly figure builders
 │   │   ├── indicators.py               # SMA, EMA, Bollinger, RSI, MACD, ATR, OBV

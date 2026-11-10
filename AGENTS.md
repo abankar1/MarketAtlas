@@ -47,7 +47,7 @@ repo root/
 │   ├── backfill/
 │   │   └── backfill_10y.py             # one-time historical backfill
 │   ├── dashboard/
-│   │   ├── app.py                      # Streamlit entry point — config, filter bar, tabs, usage_events logging
+│   │   ├── app.py                      # Streamlit entry point — config, tabs, filter row, usage_events logging
 │   │   ├── data.py                     # DB queries + session-level LRU caches
 │   │   ├── charts.py                   # Plotly figure builders (treemap + candlestick)
 │   │   ├── indicators.py               # pure-pandas technical indicator functions
@@ -288,11 +288,11 @@ The dashboard is split into one entry-point module and several supporting module
 
 | Module | Responsibility |
 |--------|---------------|
-| `app.py` | Page config, small global stylesheet, header + filter bar (index, time range, Custom dialog), native `st.tabs` (only the open tab runs), lifecycle logging (`session_load` / `tab_change` → `usage_events`). Developer mode adds a cache sidebar. |
+| `app.py` | Page config, small global stylesheet, header, native `st.tabs` (only the open tab runs), filter row at the top of each tab (Heatmap sectors, index, time range, Custom dialog), lifecycle logging (`session_load` / `tab_change` → `usage_events`). Developer mode adds a cache sidebar. |
 | `data.py` | `connect`, `build_universe_sql`, `fetch_treemap_data`, `fetch_available_date_bounds`, `fetch_index_overlap`, `get_treemap_data_cached`, `get_ohlcv_cached`, LRU cache helpers |
 | `charts.py` | `build_fig` (treemap), `build_detail_fig` (multi-panel candlestick), `build_compare_fig` (multi-symbol rebased) |
 | `indicators.py` | Pure-pandas indicator computations — no Streamlit or DB dependencies |
-| `heatmap.py` | `render_heatmap_tab` — sector filter, top-5 / bottom-5 movers strip (one HTML grid), Worst→Best colour key, Finviz-style treemap. Palette selector and ranked-table view are hidden but kept in code. |
+| `heatmap.py` | `render_heatmap_tab` — top-5 / bottom-5 movers strip (one HTML grid; each card shows latest close, % and $ change), Worst→Best colour key, Finviz-style treemap. Palette selector and ranked-table view are hidden but kept in code. |
 | `sector_synopsis.py` | `render_sector_synopsis_tab` (entry point) + `render_sector_synopsis` (`@st.fragment`) |
 | `stock_detail.py` | `render_stock_detail` (`@st.fragment`) — symbol picker, index membership badges, candlestick chart, OHLCV CSV export, Compare-mode multi-symbol chart |
 | `index_overlap.py` | `render_index_overlap_tab` — present in code but **hidden** from the tab strip (still renderable if the tab is re-added to `_TABS`) |
@@ -316,18 +316,32 @@ tabs = st.tabs(_TABS, key="active_tab", default=_TABS[0],
 # _on_tab_change fires a fire-and-forget log_usage_event(..., 'tab_change', ...).
 ```
 
-### Filter bar and time range
+### Filter row and time range
 
-Index and time range sit in one row above the tabs (`st.container(horizontal=True, wrap=False)`,
-both selectboxes with `filter_mode=None` so phones don't open a keyboard).
+Each tab starts with one filter row (`_render_filter_row`, a horizontal
+`st.container(key="filter_row")`): on the Heatmap the sector multiselect comes
+first, then index and time range; the other tabs show just index and time
+range. The row is drawn before the tab loads its data, so it stays in place
+under the loading spinner. Sector options come from the cached
+`fetch_index_overlap` (`_sector_options`), not from the price data. On phones,
+CSS on the widgets' `st-key-*` classes puts sectors on its own line and index
++ time range side by side. Both selectboxes use `filter_mode=None` so phones
+don't open a keyboard.
+
+The sector multiselect is only drawn on the Heatmap, so `main()` re-assigns
+`st.session_state["heatmap_sector_filter"]` at the top of each run; otherwise
+Streamlit drops a widget's state on runs where it isn't drawn. Selections not
+in the current universe are dropped before the widget renders.
+
 The range lives in plain session keys, not widget keys: `range_preset`
 (`"24H"`, `"1W"`, `"1M"`, `"3M"`, `"6M"`, `"1Y"`, or `None` for custom) and
 `custom_range` (a date tuple). `_resolve_range()` turns them into
 `(date_from, date_to, label)` each run, clamped to the data, so presets roll
 forward with new data. The dropdown (`range_choice`) is re-synced from
 `range_preset` before it renders, except on the run that opens the Custom
-dialog. The dialog (`@st.dialog`, `on_dismiss` restores the dropdown) applies
-the range once both dates are picked and calls `st.rerun()`.
+dialog. `main()` opens the dialog after the tab loop (outside the tab
+containers); it applies the range once both dates are picked and calls
+`st.rerun()`, and `on_dismiss` restores the dropdown.
 
 ---
 
@@ -340,7 +354,8 @@ the range once both dates are picked and calls `st.rerun()`.
 | `load_config` | `() -> dict` | Delegates to `src.config.settings.load_settings()` (st.secrets / env vars / JSON file). Returns `{}` on missing config so caller can show a friendly error. |
 | `_preset_dates` | `(key: str, prev_day=None) -> (date, date)` | Compute (date_from, date_to) for a preset key. `"24H"` starts at `prev_day` (previous trading day, from `fetch_previous_trading_day`) so the range spans two closes |
 | `_resolve_range` | `(min_day, end_max_day, prev_day) -> (date, date, str)` | Current range from `range_preset` / `custom_range`, clamped to the data, plus its heading label |
-| `_render_filter_bar` | `(min_day, end_max_day, prev_day, span_label) -> None` | Index + time-range dropdowns above the tabs; opens the Custom dialog when `Custom…` is picked |
+| `_render_filter_row` | `(span_label, sector_options=None) -> None` | Filter row at the top of each tab: sector multiselect (Heatmap only, when `sector_options` is given), index and time-range dropdowns |
+| `_sector_options` | `(db_url, index_key) -> list[str]` | Sectors present in the selected universe, from the cached `fetch_index_overlap` |
 | `_custom_range_dialog` | `(min_day, end_max_day, current) -> None` | `@st.dialog` range calendar for **Custom**; writes `range_preset=None` + `custom_range` and reruns. `on_dismiss` puts the dropdown back on the active range |
 | `_on_tab_change` | `(db_url: str = "") -> None` | `st.tabs` on_change; logs `tab_change` to `usage_events` (fire-and-forget) |
 | `main` | `() -> None` | Streamlit entry point. Generates `_session_id` (UUID) once per session. Logs `session_load` (with `to_tab='Heatmap'`) once per session, gated by `_app_load_persisted`. |
@@ -365,7 +380,8 @@ the range once both dates are picked and calls `st.rerun()`.
 
 | Function | Signature | Purpose |
 |----------|-----------|---------|
-| `build_fig` | `(df, color_range) -> Figure` | Builds Plotly treemap (RdYlGn, sized by dollar volume) |
+| `build_fig` | `(df, color_range, color_scale, values_col, tile_values=False) -> Figure` | Builds Plotly treemap colored by percentile rank, sized by dollar volume. `tile_values=True` (phones) prints price + return % on each tile |
+| `fmt_usd` | `(value, signed=False) -> str` | `$1,234` from 1,000 up, `$123.45` below; `signed` adds `+`/`-`. Used by tiles and mover cards |
 | `build_detail_fig` | `(df, symbol, active: list[str], view_from=None) -> Figure` | Builds dynamic multi-panel candlestick figure. Callers load `INDICATOR_WARMUP_DAYS` (120) of extra history; indicators are computed on all of it and every trace is trimmed to start at `view_from` |
 
 `build_detail_fig` layout rules:
@@ -395,7 +411,7 @@ All functions are pure pandas — no Streamlit or DB imports.
 | `render_ranked_table` | `(df, color_range) -> None` | Renders sortable table of all stocks by return % with RdYlGn coloring |
 | `_build_export_csv` | `(df) -> bytes` | Builds in-memory CSV: symbol, name, sector, return_pct, dollar_volume, percentile_rank |
 | `_exceeds_three_months` | `(d_from, d_to) -> bool` | Calendar-month guard — True if span is strictly > 3 months |
-| `render_heatmap_tab` | `(df, index_key, date_from, date_to, size_by="dollar_volume") -> None` | Full Heatmap tab: sector filter, movers strip, colour key, treemap |
+| `render_heatmap_tab` | `(df, index_key, date_from, date_to, size_by="dollar_volume", sectors=None, tile_values=False) -> None` | Heatmap tab body for the selected `sectors` (all when empty): movers strip, colour key, treemap. The sector dropdown is drawn by app.py |
 
 CSV export is disabled (`disabled=True`, empty data) when the date range exceeds 3 calendar months.
 
